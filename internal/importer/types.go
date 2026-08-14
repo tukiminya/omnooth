@@ -10,8 +10,9 @@ type ImportRequest struct {
 	DownloadURL          *url.URL
 	DownloadableFilename string
 	ItemID               int64
-	OrderID              int64
-	VariationID          int64
+	// OrderID は、ギフト商品の場合に0となる。
+	OrderID     int64
+	VariationID int64
 }
 
 // ItemMetadata は、取込商品の配置に必要なBOOTHの商品情報を保持する。

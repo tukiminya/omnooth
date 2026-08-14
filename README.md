@@ -29,6 +29,8 @@ go build -o omnooth .
 ./omnooth import 'booth-library-manager://item-import?dlurl=...&downloadable_filename=...&item_id=...&order_id=...&variation_id=...'
 ```
 
+ギフト商品では `order_id` が省略されることがありますが、そのまま取り込めます。
+
 取込結果は次の構造で保存されます。
 
 ```text

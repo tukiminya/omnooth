@@ -22,7 +22,7 @@ func (i Importer) Import(ctx context.Context, request ImportRequest) (ImportResu
 	if err := ValidateDownloadURL(request.DownloadURL); err != nil {
 		return ImportResult{}, err
 	}
-	if request.ItemID <= 0 || request.OrderID <= 0 || request.VariationID <= 0 || request.DownloadableFilename == "" {
+	if request.ItemID <= 0 || request.OrderID < 0 || request.VariationID <= 0 || request.DownloadableFilename == "" {
 		return ImportResult{}, ErrInvalidImportURI
 	}
 

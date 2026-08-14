@@ -14,7 +14,6 @@ var requiredQueryParameters = []string{
 	"dlurl",
 	"downloadable_filename",
 	"item_id",
-	"order_id",
 	"variation_id",
 }
 
@@ -52,9 +51,17 @@ func ParseImportURI(raw string) (ImportRequest, error) {
 	if err != nil {
 		return ImportRequest{}, err
 	}
-	orderID, err := positiveID(query.Get("order_id"), "order_id")
-	if err != nil {
-		return ImportRequest{}, err
+	var orderID int64
+	if values, ok := query["order_id"]; ok {
+		if len(values) != 1 {
+			return ImportRequest{}, fmt.Errorf("%w: order_id must not appear more than once", ErrInvalidImportURI)
+		}
+		if strings.TrimSpace(values[0]) != "" {
+			orderID, err = positiveID(values[0], "order_id")
+			if err != nil {
+				return ImportRequest{}, err
+			}
+		}
 	}
 	variationID, err := positiveID(query.Get("variation_id"), "variation_id")
 	if err != nil {

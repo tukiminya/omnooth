@@ -33,6 +33,27 @@ func TestParseImportURI(t *testing.T) {
 	if request.DownloadURL.Hostname() != "download.booth.pm" {
 		t.Fatalf("download host = %q", request.DownloadURL.Hostname())
 	}
+	if request.DownloadURL.Query().Get("X-Amz-Signature") != "secret" {
+		t.Fatalf("encoded dlurl was not decoded correctly: %q", request.DownloadURL.String())
+	}
+}
+
+func TestParseImportURIAcceptsGiftWithoutOrderID(t *testing.T) {
+	tests := map[string]string{
+		"missing": strings.Replace(validImportURI(), "&order_id=123", "", 1),
+		"empty":   strings.Replace(validImportURI(), "order_id=123", "order_id", 1),
+	}
+	for name, raw := range tests {
+		t.Run(name, func(t *testing.T) {
+			request, err := ParseImportURI(raw)
+			if err != nil {
+				t.Fatalf("ParseImportURI() error = %v", err)
+			}
+			if request.OrderID != 0 {
+				t.Fatalf("OrderID = %d, want 0", request.OrderID)
+			}
+		})
+	}
 }
 
 func TestParseImportURIRejectsMalformedInputWithoutLeakingURL(t *testing.T) {
@@ -42,6 +63,7 @@ func TestParseImportURIRejectsMalformedInputWithoutLeakingURL(t *testing.T) {
 		"missing value":   strings.Replace(validImportURI(), "item_id=8657397&", "", 1),
 		"duplicate value": validImportURI() + "&item_id=1",
 		"invalid id":      strings.Replace(validImportURI(), "order_id=123", "order_id=0", 1),
+		"duplicate order": validImportURI() + "&order_id=456",
 		"untrusted host":  strings.Replace(validImportURI(), "download.booth.pm", "booth.pm.evil.example", 1),
 	}
 	for name, raw := range tests {

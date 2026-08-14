@@ -66,7 +66,7 @@ func TestImporterImport(t *testing.T) {
 	}
 	result, err := service.Import(context.Background(), ImportRequest{
 		DownloadURL: downloadURL, DownloadableFilename: "asset.zip",
-		ItemID: 1, OrderID: 2, VariationID: 3,
+		ItemID: 1, OrderID: 0, VariationID: 3,
 	})
 	if err != nil {
 		t.Fatal(err)

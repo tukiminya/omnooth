@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -28,6 +29,7 @@ func (s *LocalStore) Replace(
 	ctx context.Context,
 	metadata importer.ItemMetadata,
 	downloadableFilename string,
+	installation importer.InstallationMetadata,
 	populate func(workDir, contentDir string) (bool, error),
 ) (importer.ImportResult, error) {
 	if s.Root == "" || populate == nil {
@@ -83,6 +85,27 @@ func (s *LocalStore) Replace(
 	}
 	if err := ctx.Err(); err != nil {
 		return importer.ImportResult{}, err
+	}
+	if installation.SchemaVersion != importer.InstallationSchemaVersion || installation.Item.ItemID != metadata.ItemID ||
+		installation.VariationID <= 0 || installation.DownloadableFilename != downloadableFilename || installation.InstalledAt.IsZero() {
+		return importer.ImportResult{}, errors.New("installation metadata is incomplete")
+	}
+	stateDir := filepath.Join(contentDir, ".omnooth")
+	if _, err := os.Lstat(stateDir); err == nil {
+		return importer.ImportResult{}, errors.New("imported content contains reserved .omnooth path")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return importer.ImportResult{}, fmt.Errorf("inspect reserved metadata path: %w", err)
+	}
+	if err := os.Mkdir(stateDir, 0o700); err != nil {
+		return importer.ImportResult{}, fmt.Errorf("create installation metadata directory: %w", err)
+	}
+	manifest, err := json.MarshalIndent(installation, "", "  ")
+	if err != nil {
+		return importer.ImportResult{}, fmt.Errorf("encode installation metadata: %w", err)
+	}
+	manifest = append(manifest, '\n')
+	if err := os.WriteFile(filepath.Join(stateDir, "installation.json"), manifest, 0o600); err != nil {
+		return importer.ImportResult{}, fmt.Errorf("write installation metadata: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return importer.ImportResult{}, fmt.Errorf("create item directory: %w", err)

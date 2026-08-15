@@ -35,15 +35,20 @@ func (fakeExtractor) Materialize(_ context.Context, source, _ string, destinatio
 }
 
 type fakeStore struct {
-	root string
+	root         string
+	installation *InstallationMetadata
 }
 
 func (f fakeStore) Replace(
 	ctx context.Context,
 	_ ItemMetadata,
 	_ string,
+	installation InstallationMetadata,
 	populate func(string, string) (bool, error),
 ) (ImportResult, error) {
+	if f.installation != nil {
+		*f.installation = installation
+	}
 	work := filepath.Join(f.root, "work")
 	content := filepath.Join(f.root, "content")
 	if err := os.MkdirAll(work, 0o755); err != nil {
@@ -58,11 +63,14 @@ func (f fakeStore) Replace(
 
 func TestImporterImport(t *testing.T) {
 	downloadURL, _ := url.Parse("https://download.booth.pm/file")
+	downloadable := DownloadableMetadata{Name: "asset.zip"}
+	variation := VariationMetadata{ID: 3, Name: "Standard", Type: "digital", Downloadables: []DownloadableMetadata{downloadable}}
+	var installation InstallationMetadata
 	service := Importer{
-		Catalog:    fakeCatalog{metadata: ItemMetadata{ItemID: 1, ItemName: "Item", ShopID: 2, ShopName: "Shop"}},
+		Catalog:    fakeCatalog{metadata: ItemMetadata{ItemID: 1, ItemName: "Item", ShopID: 2, ShopName: "Shop", Variations: []VariationMetadata{variation}}},
 		Downloader: fakeDownloader{},
 		Extractor:  fakeExtractor{},
-		Store:      fakeStore{root: t.TempDir()},
+		Store:      fakeStore{root: t.TempDir(), installation: &installation},
 	}
 	result, err := service.Import(context.Background(), ImportRequest{
 		DownloadURL: downloadURL, DownloadableFilename: "asset.zip",
@@ -73,6 +81,9 @@ func TestImporterImport(t *testing.T) {
 	}
 	if !result.Extracted {
 		t.Fatal("expected extracted result")
+	}
+	if installation.Snapshot == nil || installation.Snapshot.ID != 3 || installation.TrackingIssue != "" {
+		t.Fatalf("installation = %+v", installation)
 	}
 	content, err := os.ReadFile(filepath.Join(result.Destination, "asset.txt"))
 	if err != nil || string(content) != "download" {
@@ -91,5 +102,27 @@ func TestImporterRejectsMetadataMismatch(t *testing.T) {
 	})
 	if err == nil || errors.Is(err, ErrInvalidImportURI) {
 		t.Fatalf("expected metadata mismatch, got %v", err)
+	}
+}
+
+func TestImporterStoresUnknownSnapshotWhenCatalogDoesNotMatch(t *testing.T) {
+	downloadURL, _ := url.Parse("https://booth.pm/file")
+	var installation InstallationMetadata
+	service := Importer{
+		Catalog: fakeCatalog{metadata: ItemMetadata{
+			ItemID: 1, ItemName: "Item", ShopID: 2, ShopName: "Shop",
+			Variations: []VariationMetadata{{ID: 3, Type: "digital"}},
+		}},
+		Downloader: fakeDownloader{}, Extractor: fakeExtractor{},
+		Store: fakeStore{root: t.TempDir(), installation: &installation},
+	}
+	_, err := service.Import(context.Background(), ImportRequest{
+		DownloadURL: downloadURL, DownloadableFilename: "missing.zip", ItemID: 1, VariationID: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installation.Snapshot != nil || installation.TrackingIssue == "" {
+		t.Fatalf("installation = %+v", installation)
 	}
 }

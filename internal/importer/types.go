@@ -3,6 +3,7 @@ package importer
 import (
 	"context"
 	"net/url"
+	"time"
 )
 
 // ImportRequest は、BOOTH Library Manager URLから検証済みの入力を保持する。
@@ -17,10 +18,40 @@ type ImportRequest struct {
 
 // ItemMetadata は、取込商品の配置に必要なBOOTHの商品情報を保持する。
 type ItemMetadata struct {
-	ItemID   int64
-	ItemName string
-	ShopID   int64
-	ShopName string
+	ItemID     int64               `json:"item_id"`
+	ItemName   string              `json:"item_name"`
+	ShopID     int64               `json:"shop_id"`
+	ShopName   string              `json:"shop_name"`
+	Variations []VariationMetadata `json:"variations,omitempty"`
+}
+
+type VariationMetadata struct {
+	ID            int64                  `json:"id"`
+	Name          string                 `json:"name,omitempty"`
+	Type          string                 `json:"type"`
+	Downloadables []DownloadableMetadata `json:"downloadables"`
+}
+
+type DownloadableMetadata struct {
+	Name      string    `json:"name"`
+	FileSize  string    `json:"file_size"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+const InstallationSchemaVersion = 1
+
+// InstallationMetadata is stored beside imported content so future catalog
+// responses can be compared with the state that was visible during import.
+type InstallationMetadata struct {
+	SchemaVersion        int                `json:"schema_version"`
+	Item                 ItemMetadata       `json:"item"`
+	VariationID          int64              `json:"variation_id"`
+	VariationName        string             `json:"variation_name,omitempty"`
+	DownloadableFilename string             `json:"downloadable_filename"`
+	InstalledAt          time.Time          `json:"installed_at"`
+	Snapshot             *VariationMetadata `json:"snapshot,omitempty"`
+	TrackingIssue        string             `json:"tracking_issue,omitempty"`
 }
 
 // ImportResult は、正常に配置されたダウンロードの結果を表す。
@@ -50,6 +81,7 @@ type LibraryStore interface {
 		ctx context.Context,
 		metadata ItemMetadata,
 		downloadableFilename string,
+		installation InstallationMetadata,
 		populate func(workDir, contentDir string) (bool, error),
 	) (ImportResult, error)
 }

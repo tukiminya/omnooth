@@ -18,7 +18,7 @@ func TestBoothCatalog(t *testing.T) {
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader(`{"id":8657397,"name":"【言葉をおぼえる】ムチォ","shop":{"id":838775,"name":"IWANUGA"}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"id":8657397,"name":"【言葉をおぼえる】ムチォ","shop":{"id":838775,"name":"IWANUGA"},"variations":[{"id":14460999,"name":null,"type":"digital","downloadables":[{"name":"ムチォ_v1.6.0.zip","file_size":"157 MB","created_at":"2026-08-14T19:49:05+09:00","updated_at":"2026-08-14T19:49:05+09:00","display_order":123}]}]}`)),
 		}, nil
 	})
 	catalog := &BoothCatalog{Client: doer, BaseURL: "https://api.booth.pm/vroid/items/"}
@@ -28,6 +28,10 @@ func TestBoothCatalog(t *testing.T) {
 	}
 	if metadata.ShopID != 838775 || metadata.ShopName != "IWANUGA" || metadata.ItemID != 8657397 {
 		t.Fatalf("metadata = %+v", metadata)
+	}
+	if len(metadata.Variations) != 1 || len(metadata.Variations[0].Downloadables) != 1 ||
+		metadata.Variations[0].Downloadables[0].Name != "ムチォ_v1.6.0.zip" {
+		t.Fatalf("variations = %+v", metadata.Variations)
 	}
 }
 
@@ -41,6 +45,8 @@ func TestBoothCatalogFailures(t *testing.T) {
 		{"invalid JSON", http.StatusOK, `{`},
 		{"wrong ID", http.StatusOK, `{"id":1,"name":"Item","shop":{"id":2,"name":"Shop"}}`},
 		{"missing fields", http.StatusOK, `{"id":8657397,"name":"","shop":{"id":2,"name":"Shop"}}`},
+		{"invalid variation", http.StatusOK, `{"id":8657397,"name":"Item","shop":{"id":2,"name":"Shop"},"variations":[{"id":0,"type":"digital"}]}`},
+		{"invalid timestamp", http.StatusOK, `{"id":8657397,"name":"Item","shop":{"id":2,"name":"Shop"},"variations":[{"id":3,"type":"digital","downloadables":[{"name":"asset.zip","created_at":"bad","updated_at":"2026-08-01T00:00:00Z"}]}]}`},
 	}
 	for _, test := range responses {
 		t.Run(test.name, func(t *testing.T) {

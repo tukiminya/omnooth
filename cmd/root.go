@@ -4,45 +4,123 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/tukiminya/omnooth/internal/importer"
 	"github.com/tukiminya/omnooth/internal/platform"
 	"github.com/tukiminya/omnooth/internal/platform/scheme"
+	"github.com/tukiminya/omnooth/internal/runlog"
 )
 
 func Execute() {
+	os.Exit(execute(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+func execute(args []string, stdout, stderr io.Writer) (exitCode int) {
+	started := time.Now()
+	logger := slog.New(slog.DiscardHandler)
+	var session *runlog.Session
+
+	home, homeErr := os.UserHomeDir()
+	if homeErr != nil {
+		fmt.Fprintf(stderr, "Warning: logging unavailable: find home directory: %v\n", homeErr)
+	} else {
+		var logErr error
+		session, logErr = runlog.Open(home, started)
+		if logErr != nil {
+			fmt.Fprintf(stderr, "Warning: logging unavailable: %v\n", logErr)
+		} else {
+			logger = session.Logger
+			defer func() {
+				if err := session.Close(); err != nil {
+					fmt.Fprintf(stderr, "Warning: close log %s: %v\n", session.Path, err)
+				}
+			}()
+		}
+	}
+
+	defer func() {
+		if panicValue := recover(); panicValue != nil {
+			logger.Error("process panicked", append([]any{"event", "process_panicked", "duration", time.Since(started)}, runlog.PanicAttrs(panicValue)...)...)
+			fmt.Fprintln(stderr, "Error: unexpected internal failure")
+			if session != nil {
+				fmt.Fprintln(stderr, "Log:", session.Path)
+			}
+			exitCode = 1
+		}
+	}()
+
+	commandName := commandLabel(args)
+	logger.Info("process started", "event", "process_started", "command", commandName)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	root := NewRootCommand()
+
+	root := newRootCommand(logger)
+	root.SetArgs(args)
+	root.SetOut(stdout)
+	root.SetErr(stderr)
 	if err := root.ExecuteContext(ctx); err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
-		os.Exit(1)
+		logger.Error("command failed", append([]any{"event", "command_failed", "command", commandName, "duration", time.Since(started)}, runlog.ErrorAttrs(err)...)...)
+		fmt.Fprintln(stderr, "Error:", runlog.Sanitize(err.Error()))
+		if session != nil {
+			fmt.Fprintln(stderr, "Log:", session.Path)
+		}
+		return 1
+	}
+
+	logger.Info("command completed", "event", "command_completed", "command", commandName, "duration", time.Since(started))
+	return 0
+}
+
+func commandLabel(args []string) string {
+	if len(args) == 0 {
+		return "omnooth"
+	}
+	switch args[0] {
+	case "import":
+		return "omnooth import"
+	case "scheme":
+		if len(args) > 1 {
+			switch args[1] {
+			case "install", "status", "uninstall", "handle":
+				return "omnooth scheme " + args[1]
+			}
+		}
+		return "omnooth scheme"
+	default:
+		return "omnooth"
 	}
 }
 
 func NewRootCommand() *cobra.Command {
+	return newRootCommand(slog.New(slog.DiscardHandler))
+}
+
+func newRootCommand(logger *slog.Logger) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "omnooth",
 		Short:         "Download and organize items from your BOOTH library",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}
-	root.AddCommand(newImportCommand(), newSchemeCommand())
+	root.AddCommand(newImportCommand(logger), newSchemeCommand(logger))
 	return root
 }
 
-func newImportCommand() *cobra.Command {
+func newImportCommand(logger *slog.Logger) *cobra.Command {
 	return &cobra.Command{
 		Use:   "import <booth-library-manager URL>",
 		Short: "Import one BOOTH downloadable",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
-			result, err := importURL(command.Context(), args[0])
+			result, err := importURL(command.Context(), args[0], logger)
 			if err != nil {
 				return err
 			}
@@ -52,14 +130,21 @@ func newImportCommand() *cobra.Command {
 	}
 }
 
-func importURL(ctx context.Context, rawURL string) (importer.ImportResult, error) {
+func importURL(ctx context.Context, rawURL string, logger *slog.Logger) (importer.ImportResult, error) {
+	stageStarted := time.Now()
+	logger.Info("stage started", "event", "stage_started", "stage", "parse_import_uri")
 	request, err := importer.ParseImportURI(rawURL)
 	if err != nil {
+		logger.Error("stage failed", append([]any{"event", "stage_failed", "stage", "parse_import_uri", "duration", time.Since(stageStarted)}, runlog.ErrorAttrs(err)...)...)
 		return importer.ImportResult{}, err
 	}
+	logger.Info("stage completed", "event", "stage_completed", "stage", "parse_import_uri", "duration", time.Since(stageStarted), "item_id", request.ItemID, "variation_id", request.VariationID)
+
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return importer.ImportResult{}, fmt.Errorf("find home directory: %w", err)
+		err = fmt.Errorf("find home directory: %w", err)
+		logger.Error("stage failed", append([]any{"event", "stage_failed", "stage", "resolve_library"}, runlog.ErrorAttrs(err)...)...)
+		return importer.ImportResult{}, err
 	}
 	client := platform.NewHTTPClient()
 	service := importer.Importer{
@@ -67,11 +152,12 @@ func importURL(ctx context.Context, rawURL string) (importer.ImportResult, error
 		Downloader: platform.HTTPDownloader{Client: client},
 		Extractor:  platform.ArchiveMaterializer{},
 		Store:      platform.NewLocalStore(filepath.Join(home, "omnooth")),
+		Logger:     logger,
 	}
 	return service.Import(ctx, request)
 }
 
-func newSchemeCommand() *cobra.Command {
+func newSchemeCommand(logger *slog.Logger) *cobra.Command {
 	schemeCommand := &cobra.Command{
 		Use:   "scheme",
 		Short: "Manage the booth-library-manager URL scheme",
@@ -143,13 +229,19 @@ func newSchemeCommand() *cobra.Command {
 			Args:   cobra.ExactArgs(1),
 			RunE: func(command *cobra.Command, args []string) error {
 				// URLには署名付きダウンロード情報が含まれるため、URL自体は保存しない。
-				_ = scheme.RecordHandlerDiagnostic("received", "")
-				result, err := importURL(command.Context(), args[0])
+				if err := scheme.RecordHandlerDiagnostic("received", ""); err != nil {
+					logger.Warn("handler diagnostic failed", append([]any{"event", "handler_diagnostic_failed", "state", "received"}, runlog.ErrorAttrs(err)...)...)
+				}
+				result, err := importURL(command.Context(), args[0], logger)
 				if err != nil {
-					_ = scheme.RecordHandlerDiagnostic("failed", handlerFailureCode(err))
+					if diagnosticErr := scheme.RecordHandlerDiagnostic("failed", handlerFailureCode(err)); diagnosticErr != nil {
+						logger.Warn("handler diagnostic failed", append([]any{"event", "handler_diagnostic_failed", "state", "failed"}, runlog.ErrorAttrs(diagnosticErr)...)...)
+					}
 					return err
 				}
-				_ = scheme.RecordHandlerDiagnostic("succeeded", result.Destination)
+				if err := scheme.RecordHandlerDiagnostic("succeeded", result.Destination); err != nil {
+					logger.Warn("handler diagnostic failed", append([]any{"event", "handler_diagnostic_failed", "state", "succeeded"}, runlog.ErrorAttrs(err)...)...)
+				}
 				return nil
 			},
 		},

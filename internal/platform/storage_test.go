@@ -33,7 +33,7 @@ func TestSanitizeComponent(t *testing.T) {
 func TestLocalStoreReplacesWholeDownloadDirectory(t *testing.T) {
 	root := t.TempDir()
 	store := NewLocalStore(root)
-	first, err := store.Replace(context.Background(), testMetadata, "asset.zip", func(_, content string) (bool, error) {
+	first, err := store.Replace(context.Background(), testMetadata, "asset.zip", testInstallation(), func(_, content string) (bool, error) {
 		if err := os.WriteFile(filepath.Join(content, "old.txt"), []byte("old"), 0o644); err != nil {
 			return false, err
 		}
@@ -45,7 +45,7 @@ func TestLocalStoreReplacesWholeDownloadDirectory(t *testing.T) {
 	if !strings.Contains(first.Destination, filepath.Join("838775_Shop_Name", "8657397_Item_Name", "asset.zip")) {
 		t.Fatalf("destination = %s", first.Destination)
 	}
-	second, err := store.Replace(context.Background(), testMetadata, "asset.zip", func(_, content string) (bool, error) {
+	second, err := store.Replace(context.Background(), testMetadata, "asset.zip", testInstallation(), func(_, content string) (bool, error) {
 		return false, os.WriteFile(filepath.Join(content, "new.txt"), []byte("new"), 0o644)
 	})
 	if err != nil {
@@ -61,14 +61,14 @@ func TestLocalStoreReplacesWholeDownloadDirectory(t *testing.T) {
 
 func TestLocalStorePreservesPreviousVersionOnFailure(t *testing.T) {
 	store := NewLocalStore(t.TempDir())
-	result, err := store.Replace(context.Background(), testMetadata, "asset.zip", func(_, content string) (bool, error) {
+	result, err := store.Replace(context.Background(), testMetadata, "asset.zip", testInstallation(), func(_, content string) (bool, error) {
 		return true, os.WriteFile(filepath.Join(content, "old.txt"), []byte("old"), 0o644)
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	wantErr := errors.New("extract failed")
-	_, err = store.Replace(context.Background(), testMetadata, "asset.zip", func(_, content string) (bool, error) {
+	_, err = store.Replace(context.Background(), testMetadata, "asset.zip", testInstallation(), func(_, content string) (bool, error) {
 		_ = os.WriteFile(filepath.Join(content, "partial.txt"), []byte("partial"), 0o644)
 		return false, wantErr
 	})
@@ -89,7 +89,7 @@ func TestLocalStoreSerializesSameTarget(t *testing.T) {
 	release := make(chan struct{})
 	firstDone := make(chan error, 1)
 	go func() {
-		_, err := store.Replace(context.Background(), testMetadata, "asset.zip", func(_, _ string) (bool, error) {
+		_, err := store.Replace(context.Background(), testMetadata, "asset.zip", testInstallation(), func(_, _ string) (bool, error) {
 			close(entered)
 			<-release
 			return false, nil
@@ -99,7 +99,7 @@ func TestLocalStoreSerializesSameTarget(t *testing.T) {
 	<-entered
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
-	_, secondErr := store.Replace(ctx, testMetadata, "asset.zip", func(_, _ string) (bool, error) {
+	_, secondErr := store.Replace(ctx, testMetadata, "asset.zip", testInstallation(), func(_, _ string) (bool, error) {
 		t.Fatal("second populate ran while target was locked")
 		return false, nil
 	})
@@ -109,5 +109,38 @@ func TestLocalStoreSerializesSameTarget(t *testing.T) {
 	close(release)
 	if err := <-firstDone; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestLocalStoreWritesManifestAndRejectsReservedPath(t *testing.T) {
+	store := NewLocalStore(t.TempDir())
+	result, err := store.Replace(context.Background(), testMetadata, "asset.zip", testInstallation(), func(_, content string) (bool, error) {
+		return false, os.WriteFile(filepath.Join(content, "asset.txt"), []byte("asset"), 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := os.ReadFile(filepath.Join(result.Destination, ".omnooth", "installation.json"))
+	if err != nil || !strings.Contains(string(manifest), `"schema_version": 1`) {
+		t.Fatalf("manifest = %q, err = %v", manifest, err)
+	}
+
+	_, err = store.Replace(context.Background(), testMetadata, "other.zip", func() importer.InstallationMetadata {
+		value := testInstallation()
+		value.DownloadableFilename = "other.zip"
+		return value
+	}(), func(_, content string) (bool, error) {
+		return false, os.Mkdir(filepath.Join(content, ".omnooth"), 0o755)
+	})
+	if err == nil || !strings.Contains(err.Error(), "reserved .omnooth") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func testInstallation() importer.InstallationMetadata {
+	return importer.InstallationMetadata{
+		SchemaVersion: importer.InstallationSchemaVersion,
+		Item:          testMetadata, VariationID: 3, DownloadableFilename: "asset.zip",
+		InstalledAt: time.Now().UTC(),
 	}
 }

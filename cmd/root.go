@@ -9,11 +9,16 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
+	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"github.com/spf13/cobra"
 	"github.com/tukiminya/omnooth/internal/importer"
+	"github.com/tukiminya/omnooth/internal/outdated"
 	"github.com/tukiminya/omnooth/internal/platform"
 	"github.com/tukiminya/omnooth/internal/platform/scheme"
 	"github.com/tukiminya/omnooth/internal/runlog"
@@ -86,6 +91,8 @@ func commandLabel(args []string) string {
 	switch args[0] {
 	case "import":
 		return "omnooth import"
+	case "outdated":
+		return "omnooth outdated"
 	case "scheme":
 		if len(args) > 1 {
 			switch args[1] {
@@ -110,7 +117,7 @@ func newRootCommand(logger *slog.Logger) *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}
-	root.AddCommand(newImportCommand(logger), newSchemeCommand(logger))
+	root.AddCommand(newImportCommand(logger), newOutdatedCommand(), newSchemeCommand(logger))
 	return root
 }
 
@@ -128,6 +135,77 @@ func newImportCommand(logger *slog.Logger) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func newOutdatedCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "outdated",
+		Short: "Show imported BOOTH items whose downloadables changed",
+		Args:  cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return fmt.Errorf("find home directory: %w", err)
+			}
+			client := platform.NewHTTPClient()
+			result, err := (outdated.Service{
+				Catalog: platform.NewBoothCatalog(client),
+				Root:    filepath.Join(home, "omnooth"),
+			}).Check(command.Context())
+			if err != nil {
+				return err
+			}
+			if err := writeOutdated(command.OutOrStdout(), result); err != nil {
+				return err
+			}
+			if result.HadErrors {
+				return errors.New("some installed items could not be checked")
+			}
+			return nil
+		},
+	}
+}
+
+func writeOutdated(output io.Writer, result outdated.Result) error {
+	if len(result.Reports) == 0 {
+		_, err := fmt.Fprintln(output, "All installed items are up to date.")
+		return err
+	}
+	writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
+	if _, err := fmt.Fprintln(writer, "STATUS\tITEM\tVARIATION\tLOCAL DOWNLOADABLES\tDETAIL"); err != nil {
+		return err
+	}
+	for _, report := range result.Reports {
+		item := strconv.FormatInt(report.ItemID, 10)
+		if report.ItemName != "" {
+			item += " " + displayText(report.ItemName)
+		}
+		variation := "-"
+		if report.VariationID > 0 {
+			variation = strconv.FormatInt(report.VariationID, 10)
+			if report.VariationName != "" {
+				variation += " " + displayText(report.VariationName)
+			}
+		}
+		detail := report.Reason
+		if len(report.Changes) > 0 {
+			detail = strings.Join(report.Changes, "; ")
+		}
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n",
+			report.Status, item, variation, displayText(strings.Join(report.LocalDownloadables, ", ")), displayText(detail)); err != nil {
+			return err
+		}
+	}
+	return writer.Flush()
+}
+
+func displayText(value string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, value)
 }
 
 func importURL(ctx context.Context, rawURL string, logger *slog.Logger) (importer.ImportResult, error) {

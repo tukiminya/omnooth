@@ -90,6 +90,17 @@ func (c *BoothCatalog) GetItem(ctx context.Context, itemID int64) (importer.Item
 			ID   int64  `json:"id"`
 			Name string `json:"name"`
 		} `json:"shop"`
+		Variations []struct {
+			ID            int64   `json:"id"`
+			Name          *string `json:"name"`
+			Type          string  `json:"type"`
+			Downloadables []struct {
+				Name      string    `json:"name"`
+				FileSize  string    `json:"file_size"`
+				CreatedAt time.Time `json:"created_at"`
+				UpdatedAt time.Time `json:"updated_at"`
+			} `json:"downloadables"`
+		} `json:"variations"`
 	}
 	decoder := json.NewDecoder(io.LimitReader(resp.Body, maxCatalogResponse+1))
 	if err := decoder.Decode(&payload); err != nil {
@@ -102,10 +113,30 @@ func (c *BoothCatalog) GetItem(ctx context.Context, itemID int64) (importer.Item
 		return importer.ItemMetadata{}, errors.New("metadata response is missing required item or shop fields")
 	}
 
-	return importer.ItemMetadata{
+	metadata := importer.ItemMetadata{
 		ItemID: payload.ID, ItemName: payload.Name,
 		ShopID: payload.Shop.ID, ShopName: payload.Shop.Name,
-	}, nil
+	}
+	for _, variation := range payload.Variations {
+		if variation.ID <= 0 || strings.TrimSpace(variation.Type) == "" {
+			return importer.ItemMetadata{}, errors.New("metadata response contains an invalid variation")
+		}
+		entry := importer.VariationMetadata{ID: variation.ID, Type: variation.Type}
+		if variation.Name != nil {
+			entry.Name = *variation.Name
+		}
+		for _, downloadable := range variation.Downloadables {
+			if strings.TrimSpace(downloadable.Name) == "" || downloadable.CreatedAt.IsZero() || downloadable.UpdatedAt.IsZero() {
+				return importer.ItemMetadata{}, errors.New("metadata response contains an invalid downloadable")
+			}
+			entry.Downloadables = append(entry.Downloadables, importer.DownloadableMetadata{
+				Name: downloadable.Name, FileSize: downloadable.FileSize,
+				CreatedAt: downloadable.CreatedAt, UpdatedAt: downloadable.UpdatedAt,
+			})
+		}
+		metadata.Variations = append(metadata.Variations, entry)
+	}
+	return metadata, nil
 }
 
 type HTTPDownloader struct {

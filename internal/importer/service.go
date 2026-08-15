@@ -60,10 +60,35 @@ func (i Importer) Import(ctx context.Context, request ImportRequest) (ImportResu
 		logger.Error("import failed", append([]any{"event", "import_failed", "stage", "validate_metadata"}, runlog.ErrorAttrs(err)...)...)
 		return ImportResult{}, err
 	}
+	installation := InstallationMetadata{
+		SchemaVersion: InstallationSchemaVersion,
+		Item: ItemMetadata{
+			ItemID: metadata.ItemID, ItemName: metadata.ItemName,
+			ShopID: metadata.ShopID, ShopName: metadata.ShopName,
+		},
+		VariationID: request.VariationID, DownloadableFilename: request.DownloadableFilename,
+		InstalledAt: time.Now().UTC(), TrackingIssue: "catalog variation or downloadable not found",
+	}
+	for index := range metadata.Variations {
+		variation := metadata.Variations[index]
+		if variation.ID != request.VariationID {
+			continue
+		}
+		installation.VariationName = variation.Name
+		for _, downloadable := range variation.Downloadables {
+			if downloadable.Name == request.DownloadableFilename {
+				snapshot := variation
+				installation.Snapshot = &snapshot
+				installation.TrackingIssue = ""
+				break
+			}
+		}
+		break
+	}
 
 	stageStarted = time.Now()
 	logger.Info("stage started", "event", "stage_started", "stage", "store_import")
-	result, err := i.Store.Replace(ctx, metadata, request.DownloadableFilename, func(workDir, contentDir string) (bool, error) {
+	result, err := i.Store.Replace(ctx, metadata, request.DownloadableFilename, installation, func(workDir, contentDir string) (bool, error) {
 		source := filepath.Join(workDir, "download")
 		downloadStarted := time.Now()
 		logger.Info("stage started", "event", "stage_started", "stage", "download")

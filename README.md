@@ -66,3 +66,13 @@ go build -o omnooth .
 バイナリを更新した場合は、更新後のバイナリから `scheme install` を再実行してください。`scheme uninstall` を実行しても、取込済みの商品は削除されません。
 
 omnoothは、HTTPSの `booth.pm` またはそのサブドメインから提供されるダウンロードだけを受け付けます。
+
+## ログ
+
+omnoothは起動ごとに、処理段階と成功・失敗を次の場所へ記録します。
+
+```text
+~/omnooth/logs/log_YYYYMMDD_HHMMSS.nnnnnnnnn.txt
+```
+
+コマンドが失敗した場合は、標準エラーにも該当するログファイルのパスを表示します。Custom URLや署名付きダウンロードURLなどの機密情報はログへ記録しません。

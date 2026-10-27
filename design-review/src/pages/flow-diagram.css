@@ -1,0 +1,17 @@
+.flow-diagram { width: 100%; overflow-x: auto; background: #fff; margin: 0 0 28px; border: 1px solid #bbb; }
+.flow-canvas { position: relative; transform-origin: 0 0; }
+.flow-connections { position: absolute; inset: 0; overflow: visible; }
+.flow-connection { fill: none; stroke: #171717; stroke-width: 1.6; stroke-linecap: square; stroke-linejoin: round; }
+.flow-feedback { stroke-dasharray: 5 4; }
+.flow-edge-label { font-size: 12px; fill: #111; paint-order: stroke; stroke: #fff; stroke-width: 7px; stroke-linejoin: round; }
+.flow-node { position: absolute; display: flex; flex-direction: column; justify-content: center; gap: 5px; padding: 10px 14px; text-align: center; border: 1px solid #555; border-radius: 0; background: #fff; line-height: 1.5; }
+.flow-node strong { display: block; font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
+.flow-node span { display: block; color: #333; font-size: 12px; line-height: 1.6; }
+.flow-function strong { font-family: monospace; font-size: 13px; }
+.flow-function:hover { background: #eee; border-color: #111; }
+.flow-event { border-width: 2px; }
+.flow-result { background: #f3f3f3; }
+.flow-condition { border: 0; padding: 12px 26px; background: transparent; }
+.flow-condition strong { position: relative; font-size: 13px; }
+.flow-condition-outline { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.flow-condition-outline path { fill: #fff; stroke: #555; stroke-width: 1.2; }

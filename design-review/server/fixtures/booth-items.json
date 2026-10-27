@@ -1,0 +1,196 @@
+{
+  "checkedAt": "2026-10-22T14:10:01.890Z",
+  "requests": [
+    {
+      "url": "https://api.booth.pm/vroid/items/7328764",
+      "status": 200
+    },
+    {
+      "url": "https://api.booth.pm/vroid/items/8596249",
+      "status": 200
+    }
+  ],
+  "note": "実レスポンスを縮小。説明文は省略、画像・タグ・一部商品のファイル一覧は先頭のみ。",
+  "items": [
+    {
+      "id": 7328764,
+      "name": "【オリジナル3Dモデル】エク - Eku #Eku3D ",
+      "description": "[public description omitted]",
+      "is_adult": false,
+      "url": "https://septem47.booth.pm/items/7328764",
+      "shop": {
+        "id": 280438,
+        "name": "sep-neko-ya",
+        "subdomain": "septem47",
+        "thumbnail_url": "https://booth.pximg.net/c/48x48/users/319267/icon_image/33370e70-8204-410b-8dbc-f437d45a7cca_base_resized.jpg",
+        "url": "https://septem47.booth.pm/",
+        "verified": false
+      },
+      "images": [
+        {
+          "caption": null,
+          "original": "https://booth.pximg.net/7d1d1238-0c5a-4d1b-a4d4-fcbc42bebca8/i/7328764/68d88751-994d-4dd3-8e54-5be5bcb51fdf_base_resized.jpg",
+          "resized": "https://booth.pximg.net/c/72x72_a2_g5/7d1d1238-0c5a-4d1b-a4d4-fcbc42bebca8/i/7328764/68d88751-994d-4dd3-8e54-5be5bcb51fdf_base_resized.jpg"
+        }
+      ],
+      "category": {
+        "id": 208,
+        "name": "3Dキャラクター",
+        "parent": {
+          "name": "3Dモデル",
+          "url": "https://booth.pm/ja/browse/3Dモデル"
+        },
+        "url": "https://booth.pm/ja/browse/3Dキャラクター"
+      },
+      "tags": [
+        {
+          "name": "3Dキャラクター",
+          "url": "https://booth.pm/ja/items?tags%5B%5D=3D%E3%82%AD%E3%83%A3%E3%83%A9%E3%82%AF%E3%82%BF%E3%83%BC"
+        }
+      ],
+      "variations": [
+        {
+          "id": 12272302,
+          "name": "PC版",
+          "downloadables": [
+            {
+              "file_name": "Eku_PC_v1_2_0",
+              "file_extension": ".zip",
+              "file_size": "628 MB",
+              "name": "Eku_PC_v1_2_0.zip",
+              "created_at": "2025-10-17T18:52:43+09:00",
+              "updated_at": "2025-10-17T18:52:43+09:00",
+              "display_order": 2147418112
+            }
+          ]
+        },
+        {
+          "id": 12272386,
+          "name": "Mobile版",
+          "downloadables": [
+            {
+              "file_name": "Eku_AsteriaLycee_Mobile_v1_2_0",
+              "file_extension": ".zip",
+              "file_size": "151 MB",
+              "name": "Eku_AsteriaLycee_Mobile_v1_2_0.zip",
+              "created_at": "2025-10-17T18:53:29+09:00",
+              "updated_at": "2025-10-17T18:53:29+09:00",
+              "display_order": 2147467264
+            }
+          ]
+        },
+        {
+          "id": 12272387,
+          "name": "PC版 & Mobile版",
+          "downloadables": [
+            {
+              "file_name": "Eku_PC_v1_2_0",
+              "file_extension": ".zip",
+              "file_size": "628 MB",
+              "name": "Eku_PC_v1_2_0.zip",
+              "created_at": "2025-10-17T18:52:43+09:00",
+              "updated_at": "2025-10-17T18:52:43+09:00",
+              "display_order": 2147418112
+            }
+          ]
+        },
+        {
+          "id": 12593874,
+          "name": "追加アクセサリ (PC版用 Hairpin) ※ PC版本体は含まれません",
+          "downloadables": [
+            {
+              "file_name": "Eku_AsteriaLycee_Hairpin_v1_1_0",
+              "file_extension": ".zip",
+              "file_size": "5.09 MB",
+              "name": "Eku_AsteriaLycee_Hairpin_v1_1_0.zip",
+              "created_at": "2025-10-10T14:20:02+09:00",
+              "updated_at": "2025-10-10T14:20:02+09:00",
+              "display_order": 2146959360
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 8596249,
+      "name": "オリジナル3Dモデル『キリサメ』",
+      "description": "[public description omitted]",
+      "is_adult": false,
+      "url": "https://xelevia.booth.pm/items/8596249",
+      "shop": {
+        "id": 198421,
+        "name": "Xelevia_Industry",
+        "subdomain": "xelevia",
+        "thumbnail_url": "https://booth.pximg.net/c/48x48/users/5376240/icon_image/157d288f-cfd3-48fb-b1d2-412ca912591c_base_resized.jpg",
+        "url": "https://xelevia.booth.pm/",
+        "verified": false
+      },
+      "images": [
+        {
+          "caption": null,
+          "original": "https://booth.pximg.net/636ad57a-1ece-4d31-92ab-5100368e48ad/i/8596249/59634dad-f598-49ea-9021-c9036112a5bc_base_resized.jpg",
+          "resized": "https://booth.pximg.net/c/72x72_a2_g5/636ad57a-1ece-4d31-92ab-5100368e48ad/i/8596249/59634dad-f598-49ea-9021-c9036112a5bc_base_resized.jpg"
+        }
+      ],
+      "category": {
+        "id": 208,
+        "name": "3Dキャラクター",
+        "parent": {
+          "name": "3Dモデル",
+          "url": "https://booth.pm/ja/browse/3Dモデル"
+        },
+        "url": "https://booth.pm/ja/browse/3Dキャラクター"
+      },
+      "tags": [
+        {
+          "name": "男の娘",
+          "url": "https://booth.pm/ja/items?tags%5B%5D=%E7%94%B7%E3%81%AE%E5%A8%98"
+        }
+      ],
+      "variations": [
+        {
+          "id": 14346065,
+          "name": null,
+          "downloadables": [
+            {
+              "file_name": "Xelevia_Industry-Kirisame_Mochifitter_ver1.00",
+              "file_extension": ".zip",
+              "file_size": "11.9 MB",
+              "name": "Xelevia_Industry-Kirisame_Mochifitter_ver1.00.zip",
+              "created_at": "2026-08-01T17:38:04+09:00",
+              "updated_at": "2026-08-01T17:38:04+09:00",
+              "display_order": 1073741824
+            },
+            {
+              "file_name": "Kirisame_ver1.00",
+              "file_extension": ".zip",
+              "file_size": "486 MB",
+              "name": "Kirisame_ver1.00.zip",
+              "created_at": "2026-08-08T04:18:31+09:00",
+              "updated_at": "2026-08-08T04:18:31+09:00",
+              "display_order": 1610612736
+            },
+            {
+              "file_name": "Kirisame_Gameconsole_kaihen_ver1.00",
+              "file_extension": ".zip",
+              "file_size": "19.6 MB",
+              "name": "Kirisame_Gameconsole_kaihen_ver1.00.zip",
+              "created_at": "2026-08-08T16:38:58+09:00",
+              "updated_at": "2026-08-08T16:38:58+09:00",
+              "display_order": 1879048192
+            },
+            {
+              "file_name": "Kirisame_ver1.01",
+              "file_extension": ".zip",
+              "file_size": "507 MB",
+              "name": "Kirisame_ver1.01.zip",
+              "created_at": "2026-08-18T18:45:08+09:00",
+              "updated_at": "2026-08-18T18:45:08+09:00",
+              "display_order": 2013265920
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

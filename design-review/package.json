@@ -1,0 +1,30 @@
+{
+  "name": "omnooth-design-review",
+  "version": "1.0.0",
+  "description": "Local technical design and review workspace for omnooth",
+  "scripts": {
+    "dev": "node server/index.mjs --dev",
+    "build": "tsc && vite build",
+    "start": "node server/index.mjs",
+    "test": "node --test server/*.test.mjs",
+    "reviews": "node scripts/reviews.mjs"
+  },
+  "packageManager": "pnpm@12.3.4",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=24.0.0 <25"
+  },
+  "dependencies": {
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  }
+}

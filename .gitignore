@@ -1,0 +1,12 @@
+node_modules/
+.pnpm-store/
+design-review/dist/
+design-review/data/*.sqlite*
+design-review/data/review-snapshot.json
+design-review/data/*.tmp
+.DS_Store
+target/
+desktop/dist/
+desktop/src-tauri/gen/
+desktop/test-results/
+desktop/playwright-report/

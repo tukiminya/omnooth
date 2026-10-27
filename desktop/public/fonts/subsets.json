@@ -1,0 +1,26 @@
+[
+  {
+    "font": "LINESeedJP-Regular",
+    "fullBytes": 1512600,
+    "initialUiBytes": 80212,
+    "initialGlyphs": 336
+  },
+  {
+    "font": "LINESeedJP-Bold",
+    "fullBytes": 1552088,
+    "initialUiBytes": 82416,
+    "initialGlyphs": 336
+  },
+  {
+    "font": "GenInterfaceJP-Regular",
+    "fullBytes": 2662744,
+    "initialUiBytes": 58948,
+    "initialGlyphs": 336
+  },
+  {
+    "font": "GenInterfaceJP-Medium",
+    "fullBytes": 2684212,
+    "initialUiBytes": 59568,
+    "initialGlyphs": 336
+  }
+]

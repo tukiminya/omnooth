@@ -1,0 +1,60 @@
+.database-er { background: #fff; }
+.er-view-tabs { display: flex; flex-wrap: wrap; gap: 5px; border-bottom: 1px solid #bbb; }
+.er-view-tabs button { color: #333; border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 9px 11px; font-size: 13px; }
+.er-view-tabs button[aria-selected="true"] { color: #111; font-weight: 650; border-bottom-color: #111; }
+.er-toolbar { padding: 12px 0; display: flex; flex-wrap: wrap; gap: 14px; justify-content: space-between; align-items: center; }
+.er-toolbar > label { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+.er-toolbar input { margin: 0; accent-color: #111; }
+.er-zoom { display: flex; gap: 5px; align-items: center; }
+.er-zoom button { font-size: 12px; line-height: 1.5; padding: 4px 9px; min-width: 28px; }
+.er-zoom output { min-width: 45px; text-align: center; font-size: 12px; font-family: monospace; }
+.er-viewport { position: relative; overflow: auto; max-height: 78vh; background: #fff; border: 1px solid #bbb; cursor: grab; scrollbar-gutter: stable; overscroll-behavior: contain; }
+.er-viewport:active { cursor: grabbing; }
+.er-scroll-size { position: relative; }
+.er-canvas { position: relative; transform-origin: 0 0; user-select: none; }
+.er-lines { position: absolute; inset: 0; overflow: visible; }
+.er-edge { fill: none; stroke: #444; stroke-width: 1.8; stroke-linejoin: round; }
+.er-edge-hit { fill: none; stroke: transparent; stroke-width: 18; cursor: pointer; }
+.er-edge-hit:focus-visible { stroke: #bbb; outline: none; }
+.er-relation.is-active .er-edge { stroke: #000; stroke-width: 3; }
+.er-relation.is-muted .er-edge { stroke: #888; stroke-dasharray: 4 3; }
+.er-cardinality { font-family: monospace; font-size: 14px; font-weight: 650; fill: #111; paint-order: stroke; stroke: #fff; stroke-width: 7px; stroke-linejoin: round; pointer-events: none; }
+.er-edge-label { font-size: 13px; font-weight: 600; fill: #222; paint-order: stroke; stroke: #fff; stroke-width: 8px; stroke-linejoin: round; pointer-events: none; }
+.er-table { position: absolute; background: #fff; border: 1px solid #555; border-radius: 0; overflow: hidden; cursor: default; }
+.er-table.is-selected { outline: 2px solid #111; outline-offset: 2px; }
+.er-table.is-unrelated { border-style: dashed; }
+.er-table-heading { display: flex; flex-direction: column; justify-content: center; width: 100%; height: 84px; padding: 14px; text-align: left; background: #f3f3f3; color: #111; border: 0; border-bottom: 1px solid #999; border-radius: 0; gap: 7px; }
+.er-table-heading:hover { background: #e9e9e9; }
+.er-table-heading strong { font-family: monospace; font-size: 17px; line-height: 1.3; letter-spacing: -.4px; }
+.er-table-heading small { color: #333; font-size: 13px; line-height: 1.5; font-weight: 400; }
+.er-table.is-selected .er-table-heading { background: #171717; color: #fff; }
+.er-table.is-selected .er-table-heading small { color: #eee; }
+.er-table ul { padding: 0; margin: 0; list-style: none; }
+.er-table li { display: flex; align-items: center; gap: 6px; padding: 0 11px; height: 32px; border-bottom: 1px solid #ddd; color: #222; }
+.er-table li.is-fk { background: #fafafa; }
+.er-key { width: 43px; display: flex; gap: 3px; flex-shrink: 0; }
+.er-key b { font-family: monospace; font-size: 10px; color: #333; }
+.er-table li > code { font-size: 14px; color: #111; white-space: nowrap; }
+.er-field-type { font-family: monospace; font-size: 10px; color: #444; margin-left: auto; }
+.er-null { color: #333; font-weight: 650; font-size: 11px; }
+.er-table-review { position: absolute; bottom: 0; left: 0; height: 41px; border: 0; border-top: 1px solid #aaa; border-radius: 0; width: 100%; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; gap: 6px; color: #333; }
+.er-table-review > span { font-size: 10px; }
+.er-table-review > span:last-child { color: #111; font-size: 11px; }
+.er-inspector { padding: 20px 0 0; }
+.er-inspector-heading { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.er-inspector-heading button { font-size: 12px; }
+.er-relation-list { display: grid; gap: 7px; }
+.er-relation-list > button { display: flex; flex-wrap: wrap; align-items: center; gap: 15px; padding: 10px; text-align: left; }
+.er-relation-list > button.is-selected { border-color: #111; background: #eee; }
+.er-relation-list code { font-size: 12px; overflow-wrap: anywhere; }
+.er-relation-list span { font-size: 12px; color: #333; }
+.er-relation-list small { margin-left: auto; font-size: 11px; }
+.er-open-spec { margin-top: 14px; }
+@media(max-width:750px) {
+  .er-view-tabs button { padding: 8px; font-size: 12px; }
+  .er-toolbar { gap: 10px; }
+  .er-zoom { gap: 4px; }
+  .er-zoom button { padding: 4px 7px; }
+  .er-relation-list > button { gap: 5px; }
+  .er-relation-list span { width: 100%; }
+}

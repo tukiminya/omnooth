@@ -1,0 +1,173 @@
+{
+  "date": "2026-10-27",
+  "catalogVersion": "2026-10-27.2",
+  "authorization": "このチャットでの、残りの軽微な箇所をオートレビューする明示的な依頼。将来の包括的な自動承認ではない。",
+  "reviewer": "Codex（自動レビュー）",
+  "scope": "未レビュー13件と、日付・SHA-256 統一の変更依頼・関連6件",
+  "verification": {
+    "tests": 32,
+    "typecheck": "passed",
+    "build": "passed",
+    "runtimeValidation": "本体未実装。Unity / OS 認証 / 展開ライブラリの実機検証は実装段階で行う。"
+  },
+  "records": [
+    {
+      "id": "req-item-import",
+      "revision": "c1e899ff44cb681d",
+      "title": "Deep Link をファイルインストールのキューに追加する",
+      "note": "受信例の 1.01 を識別に使わないよう統一。Deep Link の原本保存キューと Unity 適用を分離した既存設計を維持。",
+      "result": "approved_by_delegated_auto_review",
+      "commentId": "e2ce89fe-6846-43e7-82f3-db43656fa296"
+    },
+    {
+      "id": "req-version",
+      "revision": "c7f89f37c4e98e2a",
+      "title": "全てのバージョンを日付と SHA-256 で管理する",
+      "note": "明確なファイル名を含む全件を日付と SHA-256 に統一するユーザー指示を反映。設定・手入力の例外を除去。",
+      "result": "approved_by_delegated_auto_review",
+      "commentId": "91e4de6c-eda7-4a9c-b287-0a9288c88537"
+    },
+    {
+      "id": "db-versions",
+      "revision": "2f145a500be60a74",
+      "title": "package_versions",
+      "note": "version_date と SHA-256 全長で識別し、表示ラベルの衝突を許容しても原本を混同しない。参照用の複合 UNIQUE を補完。",
+      "result": "approved_by_delegated_auto_review",
+      "commentId": "6f7f8779-40db-4613-a4c2-b5963b194fa8"
+    },
+    {
+      "id": "db-selections",
+      "revision": "1a3d73a6cf9dec15",
+      "title": "project_selections",
+      "note": "版・ファイル・プロジェクトの所属を複合 FK で確認。参照用 UNIQUE と遅延 FK による一括更新を SQLite で検証。",
+      "result": "approved_by_delegated_auto_review",
+      "commentId": "473363ae-d3a2-43e4-8781-a2bec22f7401"
+    },
+    {
+      "id": "db-installed-files",
+      "revision": "eec6d9b87115fba9",
+      "title": "project_files",
+      "note": "実ファイルを選択済み unitypackage と同じ商品へ結ぶ複合 FK を補完。別商品の所有権混入を SQLite で拒否できることを確認。",
+      "result": "approved_by_delegated_auto_review",
+      "commentId": "2f77bd7f-ff08-45ea-976b-eb36103f08a8"
+    },
+    {
+      "id": "db-operations",
+      "revision": "554d79da429045e0",
+      "title": "install_operations",
+      "note": "add / remove / update / reselect の from/to と同一商品の版を検証。元の配置への復帰操作は再導入していない。",
+      "result": "approved_by_delegated_auto_review",
+      "commentId": "d2aa001d-f806-4683-a75b-e83d73c2a399"
+    },
+    {
+      "id": "db-settings",
+      "revision": "27df553414011cca",
+      "title": "app_settings",
+      "note": "版名認識の設定を除去。言語・展開設定の受付時スナップショット・非表示機能の初回説明・履歴保持は維持。",
+      "result": "approved_by_delegated_auto_review",
+      "commentId": "fed3eb38-81d0-4f92-9a49-bf1a5e333622"
+    },
+    {
+      "id": "fn-import",
+      "revision": "23f4c2084ae7c749",
+      "title": "importLibraryArchive",
+      "note": "原本の SHA-256 全長と初回日付を再利用。展開設定の保持・入力待ち・DB 成功確定を確認し、直接追加を除外。",
+      "result": "approved_by_delegated_auto_review",
+      "commentId": "1bdbfcac-d2cf-4ee6-a7d2-7c76549ee51b"
+    },
+    {
+      "id": "fn-infer",
+      "revision": "f07bfc234dc68229",
+      "title": "identifyPackageVersion",
+      "note": "identifyPackageVersion へ変更し、全ファイル名を日付@shaにする参照実装とテストを確認。",
+      "result": "approved_by_delegated_auto_review",
+      "commentId": "9231d7f0-75a6-484a-8b50-4b7989582e37"
+    },
+    {
+      "id": "fn-custom",
+      "revision": "a5d9aa8e4d203e02",
+      "title": "createCustomPackage",
+      "note": "用意済み unitypackage と完全一致依存だけを保存。版名入力を廃止し、依存 ID を含む安定したマニフェストの SHA-256 と日付を使う。",
+      "result": "approved_by_delegated_auto_review",
+      "commentId": "58185aac-e1ea-4bc9-ab44-f58ce13c5221"
+    },
+    {
+      "id": "fn-library-contents",
+      "revision": "56b8396017d2b3d5",
+      "title": "getLibraryContents",
+      "note": "unitypackage のみを列挙。その他の収録物を適用候補にせず、候補なし・危険なマニフェストをテスト。",
+      "result": "approved_by_delegated_auto_review",
+      "commentId": "8509f053-ab21-4acb-8419-69a3be8be59c"
+    },
+    {
+      "id": "fn-content-selection",
+      "revision": "f79bece05e34842b",
+      "title": "buildContentSelection",
+      "note": "明示したファイル ID と順序を検証。未選択の兄弟、直接コピー、配置先の入力がないことを確認。",
+      "result": "approved_by_delegated_auto_review",
+      "commentId": "efd788be-476d-4059-ad96-8864e061b2c8"
+    },
+    {
+      "id": "fn-plan",
+      "revision": "d45f3fdbe95a5fe3",
+      "title": "buildInstallPlan",
+      "note": "removePackageIds を補い、全削除を空選択から分離。保持するパッケージを含む希望状態で依存を照合し、別の配置先への変更を除外。",
+      "result": "approved_by_delegated_auto_review",
+      "commentId": "0585724d-7047-407f-bb5e-98a93e526c97"
+    },
+    {
+      "id": "fn-stage",
+      "revision": "72ccef2c58e79127",
+      "title": "stageInstallFiles",
+      "note": "選択原本のハッシュ・容量・危険パス・バックアップを検証する契約を確認。直接コピーのための入力を持たない。",
+      "result": "approved_by_delegated_auto_review",
+      "commentId": "1b0c4643-09fd-425a-a250-3cab7a8d835b"
+    },
+    {
+      "id": "fn-unity",
+      "revision": "3441cb96609632be",
+      "title": "applyWithUnity",
+      "note": "選択した unitypackage を依存順・明示順に既定パスへ取り込み、完了と結果を確認する契約を確認。実機検証は実装段階の必須事項として維持。",
+      "result": "approved_by_delegated_auto_review",
+      "commentId": "7ce66aac-6574-401c-abc5-0c4e25a09d13"
+    },
+    {
+      "id": "fn-commit",
+      "revision": "7cb8762662334a7b",
+      "title": "commitInstallation",
+      "note": "ファイル照合後の単一トランザクションと、COMMIT 後の成功通知を確認。版・選択・所有台帳の遅延 FK 検証を補完。",
+      "result": "approved_by_delegated_auto_review",
+      "commentId": "ec07bfb4-c344-48b3-90c7-f1dcdcd3413b"
+    },
+    {
+      "id": "fn-dispatch",
+      "revision": "34b0ee6f9981b4b8",
+      "title": "dispatchAppCommand",
+      "note": "GUI / stdio / Deep Link が共通ハンドラーを通る。削除したパス変更コマンドを持たないことを確認。",
+      "result": "approved_by_delegated_auto_review",
+      "commentId": "d1148fac-bc19-4772-b36a-1b983c4b76a6"
+    },
+    {
+      "id": "fn-settings",
+      "revision": "c2160581639b57fa",
+      "title": "updateAppSettings",
+      "note": "版名認識の引数を除去。ライブラリの保存先と Unity の配置先を混同せず、既存ジョブの展開設定を上書きしない契約を確認。",
+      "result": "approved_by_delegated_auto_review",
+      "commentId": "694b88c4-5ceb-4512-93c0-4db0735c0c97"
+    },
+    {
+      "id": "decision-version",
+      "revision": "b7c478bbd610c580",
+      "title": "全て日付と SHA-256 に統一する",
+      "note": "通常取り込みと共通カスタムを日付・SHA-256 に統一。旧ファイル名推定方式を廃止するユーザーの決定を記録。",
+      "result": "approved_by_delegated_auto_review",
+      "commentId": "70b25402-0007-4514-b88d-35751a541b2d"
+    }
+  ],
+  "deferred": [],
+  "statusCounts": {
+    "approved": 75,
+    "changes": 0,
+    "unreviewed": 0
+  }
+}

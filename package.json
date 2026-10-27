@@ -1,0 +1,17 @@
+{
+  "name": "omnooth",
+  "private": true,
+  "packageManager": "pnpm@12.3.4",
+  "scripts": {
+    "dev": "pnpm --dir design-review dev",
+    "build": "pnpm --dir design-review build",
+    "start": "pnpm --dir design-review start",
+    "test": "pnpm --dir design-review test",
+    "reviews": "pnpm --dir design-review reviews",
+    "app:dev": "pnpm --dir desktop tauri dev",
+    "app:build": "pnpm --dir desktop tauri build --no-bundle",
+    "app:web": "pnpm --dir desktop dev",
+    "app:check": "pnpm --dir desktop build",
+    "app:test": "cargo test --workspace"
+  }
+}

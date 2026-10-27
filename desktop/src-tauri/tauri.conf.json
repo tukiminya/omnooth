@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "omnooth",
+  "version": "0.1.0",
+  "identifier": "dev.tuki.omnooth",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{
+      "label": "main", "title": "omnooth", "width": 1440, "height": 900,
+      "minWidth": 1000, "minHeight": 680
+    }],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'"
+    }
+  },
+  "bundle": { "active": false },
+  "plugins": {
+    "deep-link": {
+      "desktop": { "schemes": ["booth-library-manager"] }
+    }
+  }
+}

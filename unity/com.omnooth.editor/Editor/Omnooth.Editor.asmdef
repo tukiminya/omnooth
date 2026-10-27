@@ -1,0 +1,5 @@
+{
+  "name": "Omnooth.Editor",
+  "includePlatforms": ["Editor"],
+  "autoReferenced": true
+}

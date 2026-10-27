@@ -1,0 +1,41 @@
+{
+  "historicalOnly": true,
+  "supersededOn": "2026-10-27",
+  "currentDesignVerified": false,
+  "fileKey": "aKMF6XjaOU2Hz7Bj9GxPXY",
+  "sessionId": "3bc705eb-dcc7-44ce-a2c0-6584d2cca440",
+  "updatedFrameId": "22:466",
+  "updatedContainerIds": [
+    "29:1356",
+    "22:501"
+  ],
+  "additionalStates": {
+    "singleUnitypackage": "82:717",
+    "multipleUnitypackages": "82:736",
+    "texturesOnly": "82:762",
+    "storedArchive": "82:790"
+  },
+  "components": [
+    "81:667",
+    "81:670",
+    "81:672"
+  ],
+  "variableCollectionId": "VariableCollectionId:81:643",
+  "resolvedCommentNumbers": [
+    6
+  ],
+  "commentResolutionNote": "AI と明記したコメントは検索結果0件。版名表示の未決コメント #6 を、明確なファイル名と date@sha の方針確定により解決。",
+  "removedSpecIds": [
+    "infra-inference",
+    "fn-infer-ai"
+  ],
+  "validation": {
+    "editableMainFrameDescendants": 148,
+    "newTextFamilies": [
+      "LINE Seed JP",
+      "Inter"
+    ],
+    "fullUiRasterImages": 0,
+    "newStateCount": 4
+  }
+}

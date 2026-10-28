@@ -21,6 +21,8 @@ pnpm --dir desktop exec playwright install chromium
 pnpm app:build                 # 本体のリリース実行ファイル。bundle は作らない
 ```
 
+`main` への push（マージを含む）では GitHub Actions が Windows x64、macOS Apple Silicon / Intel、Linux x64 の配布用インストーラーを生成し、全ビルドの成功後に GitHub Release の下書きへ添付する。手動実行も可能。[配布手順](../docs/releases.md) に対象形式、再実行、署名の制約を記載した。
+
 フロントの出力は `desktop/dist/`、Rust の出力は `target/`。既存の `dist/omnooth` を上書きしない。Tauri の JS API / Rust の minor バージョンを揃える。現在は API 2.11 系と dialog 2.7 系を固定している。
 
 デバッグビルドのみ `OMNOOTH_DEV_DATA_DIR` で検証用 DB と保存庫を一時フォルダーへ分離できる。通常は Tauri の appData に `omnooth.sqlite` と `Library/` を作る。

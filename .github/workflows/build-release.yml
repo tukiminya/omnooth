@@ -1,0 +1,164 @@
+name: Build and draft release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: main-release-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.artifact_id }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - artifact_id: macos-arm64
+            runner: macos-15
+            rust_target: aarch64-apple-darwin
+            bundles: dmg
+          - artifact_id: macos-x64
+            runner: macos-15-intel
+            rust_target: x86_64-apple-darwin
+            bundles: dmg
+          - artifact_id: windows-x64
+            runner: windows-2022
+            rust_target: x86_64-pc-windows-msvc
+            bundles: nsis
+          - artifact_id: linux-x64
+            runner: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+            bundles: deb,appimage
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js 24 and pnpm 12.3.4
+        uses: pnpm/setup@v2
+        with:
+          version: 12.3.4
+          runtime: node@24
+          working-directory: desktop
+          cache: true
+          cache-dependency-path: desktop/pnpm-lock.yaml
+          install: false
+
+      - name: Set up Rust 1.98.0
+        uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev \
+            patchelf \
+            wget \
+            xdg-utils
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Tauri bundles and upload build artifacts
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f
+        with:
+          projectPath: desktop
+          tauriScript: pnpm tauri
+          args: >-
+            --target ${{ matrix.rust_target }}
+            --bundles ${{ matrix.bundles }}
+            --config src-tauri/tauri.ci.conf.json
+            --ci
+          uploadWorkflowArtifacts: true
+          workflowArtifactNamePattern: omnooth-${{ github.sha }}-${{ matrix.artifact_id }}-[bundle]
+          uploadUpdaterJson: false
+          uploadUpdaterSignatures: false
+
+  draft-release:
+    name: Create or refresh draft release
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Download this run's build artifacts
+        uses: actions/download-artifact@v5
+        with:
+          pattern: omnooth-${{ github.sha }}-*
+          path: ${{ runner.temp }}/omnooth-tauri-artifacts
+
+      - name: Validate and stage installers
+        id: release
+        run: |
+          node --test desktop/scripts/stage-release-assets.test.mjs
+          node desktop/scripts/stage-release-assets.mjs "$RUNNER_TEMP/omnooth-tauri-artifacts" "$RUNNER_TEMP/omnooth-release-assets"
+
+      - name: Write release notes
+        env:
+          RELEASE_NAME: ${{ steps.release.outputs.release_name }}
+          APP_VERSION: ${{ steps.release.outputs.app_version }}
+          COMMIT_SHA: ${{ github.sha }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          cat > "$RUNNER_TEMP/omnooth-release-notes.md" <<EOF
+          # ${RELEASE_NAME}
+          
+          Automated main build for omnooth ${APP_VERSION}.
+          
+          Source commit: ${COMMIT_SHA}
+          Workflow run: ${RUN_NUMBER}
+          
+          This is a draft release. Review and verify every installer on its target operating system before publishing.
+          The Windows and Linux packages are unsigned. The macOS app uses ad-hoc signing and is not notarized.
+          EOF
+
+      - name: Create or refresh the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+          RELEASE_NAME: ${{ steps.release.outputs.release_name }}
+        run: |
+          mapfile -d '' assets < <(find "$RUNNER_TEMP/omnooth-release-assets" -maxdepth 1 -type f -print0 | sort -z)
+          if [ "${#assets[@]}" -ne 5 ]; then
+            echo "Expected five installer assets, found ${#assets[@]}." >&2
+            exit 1
+          fi
+
+          if gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft > "$RUNNER_TEMP/omnooth-release-draft-state" 2>/dev/null; then
+            if [ "$(cat "$RUNNER_TEMP/omnooth-release-draft-state")" != "true" ]; then
+              echo "Release $RELEASE_TAG already exists and is published; refusing to replace it." >&2
+              exit 1
+            fi
+            gh release edit "$RELEASE_TAG" --draft --title "$RELEASE_NAME" --notes-file "$RUNNER_TEMP/omnooth-release-notes.md"
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+          else
+            gh release create "$RELEASE_TAG" "${assets[@]}" \
+              --draft \
+              --latest=false \
+              --target "$GITHUB_SHA" \
+              --title "$RELEASE_NAME" \
+              --notes-file "$RUNNER_TEMP/omnooth-release-notes.md"
+          fi

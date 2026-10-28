@@ -4,8 +4,10 @@
 //! them and writing the matching result. This crate never edits project assets.
 
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
+use std::fs::File;
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -348,6 +350,9 @@ fn atomic_write(destination: &Path, bytes: &[u8]) -> Result<(), AdapterError> {
         file.sync_all()?;
         drop(file);
         fs::rename(&temp, destination)?;
+        // Unix permits opening a directory for fsync. Windows does not through std::fs::File;
+        // the file contents are already flushed above and rename remains atomic there.
+        #[cfg(unix)]
         File::open(parent)?.sync_all()?;
         Ok(())
     })();

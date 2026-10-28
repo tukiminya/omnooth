@@ -4,7 +4,7 @@
 
 ## 2026-10-27 の継続ルール
 
-- Figma はユーザーが手直し済み。2026-10-27 の開発開始依頼に基づく参照のみ許可。Figma の編集・コメント操作と古い編集記録の再実行は行わない。
+- Figma はユーザーが手直し済み。最新の継続指示に従い、Figma ツール・plugin・Computer 経由の操作とコメント操作は行わない。同梱済みの本体アセットを使い、古い編集記録を再実行しない。
 - レビューアプリ内の製品画面モックと旧参照画像は削除済み。復元・再生成しない。
 - Unity 適用は unitypackage のみ。PNG / PSD 等の直接追加・コピー、専用の配置先入力はスコープ外。
 - インポート先パスの変更、配置テンプレート、MoveAsset、元の配置へ戻す機能はスコープ外。unitypackage が定義する Assets パスを使う。
@@ -12,6 +12,8 @@
 - 生成 AI やクラウド API の旧案を再導入しない。
 - 全バージョンの日付と SHA-256 管理を使う。ファイル名の版番号・手入力の版名・認識設定を再導入しない。
 - application ID は dev.tuki.omnooth。Deep Link は booth-library-manager を既定の受信先として上書き登録できる。連携専用画面は現時点で不要。マニュアルは https://omnooth.tuki.dev/docs。
+- 汎用アイコンは lucide-react を使い、Figma 由来の汎用 SVG を再導入しない。指定アプリアイコンの同梱原本は desktop/public/brand/app-icon.svg。
+- main の配布ビルドは .github/workflows/build-release.yml。全 OS 成功後に Release の下書きを作る。ローカル検証と GitHub Actions での実行結果を区別する。
 - 本体の Tauri / Rust と独立した Unity アダプターは初期実装を追加済み。実装済み範囲と未接続の機能は desktop/README.md を参照する。設計レビューアプリや TypeScript 参照関数を本体の実装済み機能とみなさない。
 - レビューの正本 design-review/data/reviews.sqlite と自動書き出しを保存する。本文・承認履歴を消さず、通常はエージェントが自分の変更を承認しない。2026-10-27 の明示的なオートレビュー依頼に限り、対象と根拠を記録して委任された項目を承認する。将来の包括的な自動承認は許可されていない。
 - 作業前からある dist/omnooth と未コミットの作業を保護する。レビューアプリのビルド先は design-review/dist/。

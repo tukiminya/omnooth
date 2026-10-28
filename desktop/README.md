@@ -69,6 +69,8 @@ Deep Link からのダウンロード、永続 FIFO、BOOTH メタデータ、�
 
 最新の [Figma](https://www.figma.com/design/aKMF6XjaOU2Hz7Bj9GxPXY/omnooth?m=dev) を参照した。書き込み・コメント操作は行わない。プロジェクト画面 36:3554、商品画面 22:466、設定 36:4080、パッケージ画面 39:5574 の構造とアセットを参照し、最新仕様に合わせて対象外の操作を除いた。全画面の実装完了や全状態のピクセル一致を意味しない。
 
+汎用アイコンは `lucide-react` の名前付き import を `src/Icon.tsx` でまとめて使う。Figma 由来の汎用 SVG は削除し、独自のワードマークだけを `public/assets/` に残した。指定されたアプリアイコン（Figma `127:1137`）の原本は `public/brand/app-icon.svg`、Tauri が使う生成済み PNG / ICO / ICNS は `src-tauri/icons/`。Web の favicon も同じ原本を使う。生成物は同梱済みなので、CI で Figma に接続しない。
+
 フォントは `public/fonts/` に同梱し、実行時の CDN 接続を不要にした。[LINE Seed JP](https://github.com/line/seed)、[Gen Interface JP](https://github.com/yamatoiizuka/gen-interface-jp)、[JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) のライセンスを `public/licenses/` に保存している。
 
 LINE / Gen はこの環境に配置済みの TTF から WOFF2 に変換し、容量が約56〜59%減った。`sizes.json` に実測値を保存した。画面文字の軽量版と、任意の商品名のための全字形版を `unicode-range` で使い分ける。画面文言を変えた場合は `fonttools[woff]` を用意して `python3 desktop/scripts/subset-fonts.py` で再生成できる。全字形版を残すので未収録の商品名も表示対象から失われない。測定結果と制約は [検証記録](../docs/implementation-validation.md) に残す。

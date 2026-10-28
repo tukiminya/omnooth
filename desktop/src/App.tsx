@@ -2,25 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import i18n from './i18n';
 import { client } from './client';
+import { Icon } from './Icon';
 import type { AppSettings, AppSnapshot, DeepLinkStatus, LibraryItem, LibraryVersion, Project } from './contracts';
 import './fonts.css';
 import './app.css';
 
 type Page = 'projects' | 'library';
 type SettingsTab = 'general' | 'history';
-type IconName = 'folder' | 'projectFolder' | 'packages' | 'settings' | 'info' | 'search' | 'plus' | 'arrow' | 'chevron' | 'history' | 'download' | 'close' | 'grip' | 'disk' | 'warning' | 'lock' | 'project' | 'link' | 'sort' | 'external';
-
-const icons: Record<IconName, string> = {
-  folder: '/assets/bb381.svg', projectFolder: '/assets/1263d.svg', packages: '/assets/d4462.svg', settings: '/assets/14529.svg',
-  info: '/assets/e6ab9.svg', search: '/assets/ccac6.svg', plus: '/assets/f6d0a.svg', arrow: '/assets/9b8f1.svg',
-  chevron: '/assets/6f29e.svg', history: '/assets/8a458.svg', download: '/assets/69020.svg', close: '/assets/d3de4.svg',
-  grip: '/assets/07f4c.svg', disk: '/assets/fae18.svg', warning: '/assets/8e489.svg', lock: '/assets/394bd.svg', project: '/assets/2f269.svg',
-  link: '/assets/2e523.svg', sort: '/assets/162d3.svg', external: '/assets/69328.svg',
-};
-
-function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
-  return <img className="icon" src={icons[name]} width={size} height={size} alt="" aria-hidden="true" />;
-}
 
 function App() {
   const { t, i18n } = useTranslation();
@@ -266,8 +254,8 @@ function App() {
 
 function Header({ project, query, onQuery, onSearch, onProjectClick, onAdd, busy, t }: { project: Project | null; query: string; onQuery: (value: string) => void; onSearch: () => void; onProjectClick: () => void; onAdd: () => void; busy: boolean; t: (key: string, options?: Record<string, unknown>) => string }) {
   return <header className="topbar">
-    <div className="brand"><img className="brand-mark" src="/assets/66bf6.svg" alt="" /><img className="brand-logo" src="/assets/1765a.svg" alt="omnooth" /></div>
-    <button type="button" className="topbar-project" onClick={onProjectClick} aria-label={t('projectPicker', { project: project?.name ?? t('chooseProject') })}><img className="icon" src={icons.project} width={18} height={18} alt="" /><span title={project?.path}>{project?.name ?? t('chooseProject')}</span></button>
+    <div className="brand"><Icon name="menu" size={24} className="brand-mark" /><img className="brand-logo" src="/assets/1765a.svg" alt="omnooth" /></div>
+    <button type="button" className="topbar-project" onClick={onProjectClick} aria-label={t('projectPicker', { project: project?.name ?? t('chooseProject') })}><Icon name="project" size={18} /><span title={project?.path}>{project?.name ?? t('chooseProject')}</span></button>
     <form className="top-search" role="search" onSubmit={(event) => { event.preventDefault(); onSearch(); }}><Icon name="search" size={18} /><input value={query} onChange={(event) => onQuery(event.target.value)} onFocus={onSearch} placeholder={t('searchAll')} aria-label={t('searchAll')} /></form>
     <div className="topbar-spacer" />
     <button className="button primary" onClick={onAdd} disabled={busy}><Icon name="download" size={16} />{busy ? t('working') : t('addFiles')}</button>

@@ -19,12 +19,12 @@ button { color: inherit; }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #6b6b6b; outline-offset: 2px; }
 button:disabled { cursor: not-allowed; opacity: .52; }
 .app-shell { height: 100dvh; min-width: 0; display: flex; flex-direction: column; background: #fff; }
-.icon { display: block; flex: 0 0 auto; object-fit: contain; }
+.icon { display: block; flex: 0 0 auto; }
 
 /* Header matches the 95px design frame and contracts naturally at laptop widths. */
 .topbar { height: 95px; flex: 0 0 95px; display: flex; align-items: center; gap: 38px; padding: 0 36px; border-bottom: 1px solid var(--line); background: #fff; }
 .brand { width: 139px; min-width: 139px; display: flex; align-items: center; gap: 16px; flex: 0 0 auto; }
-.brand-mark { width: 24px; height: 24px; object-fit: contain; }
+.brand-mark { width: 24px; height: 24px; }
 .brand-logo { width: 99px; height: 18px; object-fit: contain; }
 .topbar-project { display: flex; align-items: center; gap: 10px; max-width: 255px; height: 40px; padding: 0 20px; border: 1px solid var(--soft-line); border-radius: 24px; background: white; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 0 auto; cursor: pointer; font-size: 14px; }
 .topbar-project:hover { background: var(--wash); }

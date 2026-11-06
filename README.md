@@ -1,6 +1,6 @@
 # omnooth
 
-2026-10-27 に本体の開発を開始した。Tauri / React の本体、Rust の原本保存・ローカル取り込み・プロジェクト登録、独立した Unity アダプターを追加した。起動方法と現在の制約は [本体の開発資料](desktop/README.md)、次の作業は [実装計画](docs/implementation-plan.md) を参照する。Unity 適用、BOOTH / Deep Link、依存・競合・復旧などは引き続き実装途中。
+2026-10-27 に本体の開発を開始した。Tauri / React の本体、Rust の原本保存・ローカル取り込み・プロジェクト登録、BOOTH ダウンロードとライブラリ登録、独立した Unity アダプターを追加した。BOOTH の実ファイル検証は進行中で完了未確認。Unity 適用、依存・競合・復旧などは引き続き実装途中。起動方法と制約は [本体の開発資料](desktop/README.md)、作業状況は [実装計画](docs/implementation-plan.md) と [BOOTH 検証記録](docs/booth-import-validation.md) を参照する。
 
 次のセッションでは、まずこの README、[レビューアプリの開発資料](design-review/README.md)、`design-review/data/catalog.mjs` を読む。ここに記録した最新のユーザー指示を、過去の仕様・レビュー返信より優先する。
 
@@ -9,11 +9,12 @@
 - **Figma は最新の継続指示に従い、ツール・plugin・Computer 経由で操作しない。** 2026-10-27 の開発開始時に参照して同梱した本体アセットを使い、古い編集記録は再実行しない。
 - レビュー画面のモックと古い参照画像は削除した。復元・再生成しない。以前の Figma 編集記録は履歴であり、現在の画面デザインの正本ではない。本体の新規 UI とローカルアセットは `desktop/` に分離した。
 - **Unity に適用する単位は `.unitypackage` のみ。** 配布 ZIP 等の中から、適用する unitypackage を個別に選ぶ。複数件の順序を扱う。
+- ZIP は未展開でも収録パスを確認・検索し、unitypackage を選択できる。インポート時は選択分だけを一時展開し、一致する全件成功を確認した後に一時ファイルを削除する。原本 ZIP は保持する。[実装範囲](docs/zip-import.md) を参照する。本体の Unity 適用全体は引き続き未接続。
 - **PNG / PSD などの直接追加は対象外。** ファイルの直接コピー、専用配置先、PSD 変換・編集、Material への自動割当を実装しない。unitypackage の内部に含まれるテクスチャ等は通常のインポート対象。
 - **インポート先パスの変更は対象外。** unitypackage が定義する Assets パスを使う。配置テンプレート、パスのリマップ、`MoveAsset`、元の配置へ戻す操作を実装しない。ライブラリ保存先の変更は別の設定であり、残す。
 - 生成 AI に関する機能・クラウド API は対象外。以前の Cloudflare / Hono / AI SDK / Haiku 案を再導入しない。
 - 2026-10-27 の次の依頼で開発開始が許可された。詳細作業を GPT-6 Luna のサブエージェントへ委任し、主担当が統合と検証を行う。
-- application ID は `dev.tuki.omnooth`。BOOTH Deep Link の受信先を既存登録ごと設定し直せる操作を一般設定へ追加した。受信通知まで実装済みで、ダウンロードと永続キューは後続。
+- application ID は `dev.tuki.omnooth`。BOOTH Deep Link を受信し、重複をまとめる永続 FIFO でダウンロード・メタデータ取得・ライブラリ登録する処理を追加した。ライブラリ保存先と展開設定は受信時に固定する。署名 URL はメモリーだけに保持し、再起動時の未完了ジョブは新しいリンクを待つ。2026-10-28 に Firefox からエクの約1.19 GBの実ファイルを受信し、原本・商品・版の登録と、再受信時の重複防止を確認した。[確認範囲と制約](docs/booth-import-validation.md) を参照する。
 - 一般／バージョン履歴は明示的なタブで切り替える。連携専用画面は現時点では置かず、マニュアルは `https://omnooth.tuki.dev/docs` を開く。
 - アプリアイコンは指定された Figma の `127:1137` を同梱し、配布用 PNG / ICO / ICNS に反映した。画面内の汎用アイコンは `lucide-react` を使い、Figma から書き出した汎用 SVG は使わない。
 - `main` への push で Windows / macOS（Apple Silicon・Intel）/ Linux のインストーラーをビルドし、全件成功後に GitHub Release の下書きを作る。[配布手順と制約](docs/releases.md) を参照する。
@@ -24,7 +25,7 @@
 
 | パス | 状態と役割 |
 | --- | --- |
-| `desktop/` | Tauri 2 + React / TypeScript の初期本体。設定・ローカル取り込み画面 |
+| `desktop/` | Tauri 2 + React / TypeScript 本体。設定、ローカル取り込み、BOOTH 受信・ダウンロード・登録・ログ表示 |
 | `crates/omnooth-core/` | 本体用 SQLite、原本保存庫、プロジェクト検証、共有 command dispatcher |
 | `crates/omnooth-unity/` / `unity/` | 未接続の Unity アダプター。実インポートの動作確認は未完了 |
 | `design-review/` | 実行可能な React / Vite + Node の設計レビューアプリ |
@@ -46,7 +47,7 @@
 
 Tauri 2 + React / TypeScript、ローカル処理は Rust。GUI・Deep Link・ブラウザ / Unity 拡張の標準入出力アダプターは、同じコマンド DTO と application service を使う。検証・キュー・DB・権限判定を入口ごとに複製しない。キューと DB の所有者は単一起動の本体。
 
-以下は到達予定の構成。GUI と Rust のローカル取り込みは初期実装があり、BOOTH / 拡張 / Unity 適用の本体接続は後続。
+GUI と Rust のローカル取り込みに加え、BOOTH の受信から原本登録までの初期経路を接続した。署名 URL の OS 資格情報暗号化、期限内自動再開、外部拡張、Unity 適用は後続。
 
 ```mermaid
 flowchart LR
@@ -61,9 +62,10 @@ flowchart LR
 
 ### 取り込みと適用
 
-- `booth-library-manager://item-import` を起動時・実行中に受信し、永続 FIFO キューに入れる。実行可能ジョブを1件ずつ処理する。
+- `booth-library-manager://item-import` を起動時・実行中に受信し、永続 FIFO キューへ入れる。ジョブごとに `libraryPath` と `extractArchives` を受付時に固定して、ダウンロード、公開メタデータ取得、原本・ライブラリ登録を順に行う。同時に処理するジョブは1件。
 - `dlurl` は署名付き URL。`downloadable_filename`、`item_id`、任意の `variation_id` と `order_id` を読み、空の `order_id` は null にする。署名 URL やパスワードを資料・ログへ残さない。
-- 期限切れ・拒否は新 URL の受信待ちにし、他の実行可能ジョブを止めない。重複受信は同じジョブへまとめる。再起動時に原本・登録結果・キューを照合する。
+- 同じ `sourceIdentity` の重複受信は既存ジョブへまとめる。成功済みの再受信は保存済み結果を返し、再ダウンロードしない。失敗・期限切れは新しい Deep Link を待ち、同じジョブ ID と初回設定を使って再開する。再起動後の未完了ジョブも `awaitingUrl` として新しいリンクを待つ。
+- 署名付き `dlurl` と `order_id` はメモリー内の parsed request にだけ保持する。キュー JSON には安全な receipt、ID、受付時設定、状態、エラーコード、ローカル ID のみを保存する。OS 資格情報による暗号化と URL 有効期限内の自動再開は未実装。
 - ZIP / 7z / RAR / tar / tar.gz・tgz / tar.bz2・tbz2 / tar.xz・txz が取り込み対象。形式・暗号方式の実ファイル検証は未実施。libarchive は候補で、まだ組み込んでいない。
 - 圧縮ファイルの展開は設定に依存する。初期案は OFF。受付時にジョブへ設定をコピーし、以後の設定変更で受付済みジョブを変えない。OFF は原本保存だけで完了。後から明示的に展開できる。
 - **ライブラリ登録の成功と Unity 適用の成功は別。** 展開済みでも unitypackage がなければ適用不可。その他の収録物は原本を失わず、直接適用はしない。
@@ -87,9 +89,9 @@ flowchart LR
 ## 続く実装の順序
 
 1. この文書、本体 README、レビューアプリ README、カタログと保存済みレビューを読む。削除した機能を戻さず、Figma は操作しない。
-2. Tauri / Rust の最小構成とローカル保存処理は追加済み。既存 Unity プロジェクトへの Editor 接続・非対話 ImportPackage・完了通知の実機検証を続ける。Unity の対象バージョンは登録プロジェクトから読む。
-3. 本体の型付き契約、DB マイグレーション、原本保存庫を実装する。レビュー DB と分ける。参照関数の入出力ケースを Rust へ引き継ぐ。
-4. 取り込みキューと安全な展開、unitypackage の選択、計画・競合検出、適用・確定・復旧を接続する。その後に本体 UI・拡張・i18n を接続する。
+2. BOOTH の実ファイル検証と再起動後の新リンク再開を確認する。署名 URL の保護、メタデータ取得・登録の実データ確認、アプリ表示の最終目視を記録する。
+3. 既存 Unity プロジェクトへの Editor 接続・非対話 ImportPackage・完了通知の実機検証を続ける。Unity の対象バージョンは登録プロジェクトから読む。
+4. unitypackage の安全な解析、選択、計画・競合検出、適用・確定・復旧を接続する。外部拡張と追加検証を続ける。
 
 Unity アダプターの通信・導入、unitypackage 内部マニフェストの安全な解析、展開ライブラリの OS / 暗号方式対応、デスクトップ OS 認証は未検証。テスト済みと扱わず、実装の境界ごとに確認する。特に Tauri の公式 Biometric を macOS / Windows 用と決めつけない。
 

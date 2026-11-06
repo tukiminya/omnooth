@@ -185,7 +185,7 @@ fn optional_order_id(value: Option<String>) -> CoreResult<Option<String>> {
     }
 }
 
-fn validate_download_url(raw: &str) -> CoreResult<(Url, String, String)> {
+pub(crate) fn validate_download_url(raw: &str) -> CoreResult<(Url, String, String)> {
     if raw.contains('#') || !valid_percent_escapes(raw) {
         return Err(CoreError::Invalid("INVALID_DOWNLOAD_URL"));
     }
@@ -242,7 +242,7 @@ fn valid_percent_escapes(value: &str) -> bool {
     true
 }
 
-fn expiry_time(url: &Url) -> CoreResult<Option<String>> {
+pub(crate) fn expiry_time(url: &Url) -> CoreResult<Option<String>> {
     let mut date = None;
     let mut expires = None;
     for (key, value) in url.query_pairs() {

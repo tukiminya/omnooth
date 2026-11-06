@@ -19,6 +19,9 @@ const REQUEST_FILE: &str = "request.json";
 const RESULT_FILE: &str = "result.json";
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+mod zip_import;
+pub use zip_import::{poll_zip_import, start_zip_import, ZipImportError};
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UnityImportRequest {
@@ -176,7 +179,9 @@ pub fn read_import_result_for_request(
     project_path: impl AsRef<Path>,
     request: &UnityImportRequest,
 ) -> Result<UnityImportResult, AdapterError> {
-    validate_request(request)?;
+    // Successfully imported temporary packages may already have been deleted.
+    // Validate identity/order here; file availability is required only on publication.
+    validate_request_inner(request, false)?;
     let result = read_import_result(project_path, &request.job_id)?;
     let expected: Vec<&str> = request
         .packages
@@ -223,6 +228,13 @@ fn validate_project(path: &Path) -> Result<PathBuf, AdapterError> {
 }
 
 fn validate_request(request: &UnityImportRequest) -> Result<(), AdapterError> {
+    validate_request_inner(request, true)
+}
+
+fn validate_request_inner(
+    request: &UnityImportRequest,
+    require_files: bool,
+) -> Result<(), AdapterError> {
     if request.protocol_version != PROTOCOL_VERSION {
         return Err(AdapterError::Invalid(format!(
             "unsupported protocol_version {}",
@@ -250,10 +262,14 @@ fn validate_request(request: &UnityImportRequest) -> Result<(), AdapterError> {
                 "unitypackage paths must be absolute".into(),
             ));
         }
-        let canonical = path
-            .canonicalize()
-            .map_err(|e| AdapterError::Invalid(format!("unitypackage path is unavailable: {e}")))?;
-        if !canonical.is_file()
+        let canonical = if require_files {
+            path.canonicalize().map_err(|e| {
+                AdapterError::Invalid(format!("unitypackage path is unavailable: {e}"))
+            })?
+        } else {
+            path.to_path_buf()
+        };
+        if (require_files && !canonical.is_file())
             || !canonical
                 .extension()
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("unitypackage"))
@@ -372,9 +388,9 @@ mod tests {
 
     static TEMP_PROJECT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-    struct TempProject(PathBuf);
+    pub(crate) struct TempProject(pub(crate) PathBuf);
     impl TempProject {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let nonce = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()

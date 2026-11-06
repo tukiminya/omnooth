@@ -18,7 +18,13 @@ export interface ContentFile {
   relativePath: string;
   kind: string;
   sizeBytes: number;
-  contentHash: string;
+  contentHash?: string;
+  encrypted?: boolean;
+}
+
+export interface ArchiveContents {
+  versionId: string;
+  entries: Array<ContentFile & { encrypted: boolean }>;
 }
 
 export interface LibraryVersion {
@@ -66,4 +72,24 @@ export interface DeepLinkStatus {
     sourceIdentity: string;
   } | null;
   lastError: string | null;
+  lastImport?: {
+    jobId: number;
+    filename: string;
+    state: 'queued' | 'downloading' | 'importing' | 'awaitingUrl' | 'failed' | 'succeeded';
+    errorCode: string | null;
+    itemId: string | null;
+  } | null;
+  activeCount?: number;
+}
+
+export interface LogSnapshot {
+  sessionId: string;
+  entries: Array<{
+    id: number;
+    timestamp: string;
+    level: 'info' | 'warn' | 'error';
+    operation: string;
+    message: string;
+    correlationId: string | null;
+  }>;
 }

@@ -11,9 +11,11 @@ import {
   History,
   Info,
   Link,
+  Logs,
   LockKeyhole,
   Menu,
   Plus,
+  RefreshCw,
   Search,
   SlidersHorizontal,
   SquareArrowOutUpRight,
@@ -43,6 +45,8 @@ export type IconName =
   | 'link'
   | 'sort'
   | 'external'
+  | 'refresh'
+  | 'logs'
   | 'menu';
 
 const iconComponents = {
@@ -53,6 +57,7 @@ const iconComponents = {
   info: Info,
   search: Search,
   plus: Plus,
+  refresh: RefreshCw,
   arrow: ArrowRight,
   chevron: ChevronDown,
   history: History,
@@ -64,6 +69,7 @@ const iconComponents = {
   lock: LockKeyhole,
   project: FolderOpen,
   link: Link,
+  logs: Logs,
   sort: ArrowDownWideNarrow,
   external: SquareArrowOutUpRight,
   menu: Menu,

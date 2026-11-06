@@ -3,7 +3,10 @@ import { useTranslation } from 'react-i18next';
 import i18n from './i18n';
 import { client } from './client';
 import { Icon } from './Icon';
-import type { AppSettings, AppSnapshot, DeepLinkStatus, LibraryItem, LibraryVersion, Project } from './contracts';
+import { LogDialog } from './LogDialog';
+import { ArchiveContentsList } from './ArchiveContentsList';
+import { formatBytes } from './formatBytes';
+import type { AppSettings, AppSnapshot, ArchiveContents, DeepLinkStatus, LibraryItem, LibraryVersion, Project } from './contracts';
 import './fonts.css';
 import './app.css';
 
@@ -19,7 +22,10 @@ function App() {
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [chosenUnityPackages, setChosenUnityPackages] = useState<string[]>([]);
+  const [archivePreview, setArchivePreview] = useState<{ versionId: string; status: 'loading' | 'ready' | 'error'; entries: ArchiveContents['entries'] } | null>(null);
+  const [archivePreviewAttempt, setArchivePreviewAttempt] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [logsOpen, setLogsOpen] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState<AppSettings | null>(null);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
   const [deepLinkStatus, setDeepLinkStatus] = useState<DeepLinkStatus | null>(null);
@@ -27,23 +33,88 @@ function App() {
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
+  const [noticeHasLogAction, setNoticeHasLogAction] = useState(false);
   const [importIssues, setImportIssues] = useState<Array<{ filename: string; kind: 'warning' | 'failed'; message: string; detail?: string }>>([]);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const lastReceiptKey = useRef<string | null>(null);
+  const latestImportStateSignature = useRef(new Map<number, string>());
+  const refreshedImportJobs = useRef(new Set<number>());
+  const refreshingImportJobs = useRef(new Set<number>());
+  const snapshotGeneration = useRef(0);
+
+  function showNotice(message: string, showLogAction = false) {
+    setNotice(message);
+    setNoticeHasLogAction(showLogAction);
+  }
+
+  async function refreshForDeepLinkImport(importResult: NonNullable<DeepLinkStatus['lastImport']>, navigateToLibrary: boolean): Promise<boolean> {
+    const generation = ++snapshotGeneration.current;
+    try {
+      const next = await client.getSnapshot();
+      if (generation !== snapshotGeneration.current) return true;
+      setSnapshot(next);
+      setError('');
+      const item = importResult.itemId ? next.items.find((candidate) => candidate.id === importResult.itemId) : null;
+      if (!item) {
+        if (importResult.itemId) setError(t('deepLinkRefreshError'));
+        return !importResult.itemId;
+      }
+      setSelectedItemId(item.id);
+      setSelectedVersionId(latestVersion(item.versions)?.id ?? null);
+      setChosenUnityPackages([]);
+      if (navigateToLibrary) setActivePage('library');
+      return true;
+    } catch (cause) {
+      if (generation === snapshotGeneration.current) setError(errorMessage(cause, t('deepLinkRefreshError')));
+      void client.reportError('deep-link-library-refresh', String(cause));
+      return false;
+    }
+  }
+
+  function handleImportStatus(status: NonNullable<DeepLinkStatus['lastImport']>, initial: boolean, activeCount: number | undefined, receivedCount: number) {
+    const restoredCompletedJob = initial && receivedCount === 0;
+    const signature = `${status.state}:${status.errorCode ?? ''}`;
+    const isNewTransition = latestImportStateSignature.current.get(status.jobId) !== signature;
+    if (isNewTransition) latestImportStateSignature.current.set(status.jobId, signature);
+    if (status.state === 'succeeded' && !refreshedImportJobs.current.has(status.jobId) && !refreshingImportJobs.current.has(status.jobId)) {
+      refreshingImportJobs.current.add(status.jobId);
+      void refreshForDeepLinkImport(status, !restoredCompletedJob).then((refreshed) => {
+        refreshingImportJobs.current.delete(status.jobId);
+        if (refreshed) refreshedImportJobs.current.add(status.jobId);
+      });
+    }
+    if (!isNewTransition) return;
+    setImportIssues([]);
+    const common = { filename: status.filename, count: activeCount ?? 1 };
+    switch (status.state) {
+      case 'queued': showNotice(t('deepLinkQueued', common)); break;
+      case 'downloading': showNotice(t('deepLinkDownloading', common)); break;
+      case 'importing': showNotice(t('deepLinkImporting', common)); break;
+      case 'awaitingUrl': showNotice(t('deepLinkAwaitingUrl', common), true); break;
+      case 'failed': showNotice(t('deepLinkImportFailed', { ...common, reason: status.errorCode ?? t('deepLinkUnknownReason') }), true); break;
+      case 'succeeded':
+        if (!restoredCompletedJob) showNotice(t('deepLinkImportSucceeded', common));
+        break;
+    }
+  }
 
   useEffect(() => {
+    const generation = snapshotGeneration.current;
     client.getSnapshot().then((next) => {
-      setSnapshot(next);
+      if (generation === snapshotGeneration.current) setSnapshot(next);
       if (i18n.language !== next.settings.language) void i18n.changeLanguage(next.settings.language);
-    }).catch((cause: unknown) => setError(errorMessage(cause, i18n.t('loadError')))).finally(() => setIsLoading(false));
+    }).catch((cause: unknown) => {
+      setError(errorMessage(cause, i18n.t('loadError')));
+      void client.reportError('app-startup', String(cause));
+    }).finally(() => setIsLoading(false));
   }, [i18n]);
 
   useEffect(() => {
     let disposed = false;
     let receivedEvent = false;
     let unsubscribe: (() => void) | undefined;
-    const applyDeepLinkStatus = (status: DeepLinkStatus) => {
+    const applyDeepLinkStatus = (status: DeepLinkStatus, initial: boolean) => {
       if (disposed) return;
       setDeepLinkStatus(status);
       setDeepLinkError(status.lastError ? (status.lastError === 'BUNDLE_REQUIRED' ? i18n.t('bundleRequired') : i18n.t('deepLinkError')) : '');
@@ -51,25 +122,28 @@ function App() {
       const key = receipt ? `${status.receivedCount}\u0000${receipt.boothItemId}\u0000${receipt.variationId ?? ''}\u0000${receipt.filename}\u0000${receipt.sourceIdentity}` : null;
       if (receipt && key && key !== lastReceiptKey.current) {
         lastReceiptKey.current = key;
-        setNotice(i18n.t('deepLinkReceived', { filename: receipt.filename }));
+        showNotice(i18n.t('deepLinkReceived', { filename: receipt.filename }));
       }
+      if (status.lastImport) handleImportStatus(status.lastImport, initial, status.activeCount, status.receivedCount);
     };
     void (async () => {
       try {
         const stop = await client.onDeepLinkStatus((status) => {
           receivedEvent = true;
-          applyDeepLinkStatus(status);
+          applyDeepLinkStatus(status, false);
         });
         if (disposed) stop();
         else unsubscribe = stop;
       } catch {
         if (!disposed) setDeepLinkError(i18n.t('deepLinkError'));
+        void client.reportError('deep-link-listener', 'Could not subscribe to deep-link status updates');
       }
       try {
         const status = await client.getDeepLinkStatus();
-        if (!receivedEvent) applyDeepLinkStatus(status);
+        if (!receivedEvent) applyDeepLinkStatus(status, true);
       } catch (cause) {
         if (!disposed) setDeepLinkError(deepLinkErrorMessage(cause));
+        void client.reportError('deep-link-status', String(cause));
       }
     })();
     return () => { disposed = true; unsubscribe?.(); };
@@ -77,7 +151,23 @@ function App() {
 
   const selectedProject = snapshot?.projects.find((project) => project.id === selectedProjectId) ?? null;
   const selectedItem = snapshot?.items.find((item) => item.id === selectedItemId) ?? null;
-  const selectedVersion = selectedItem?.versions.find((version) => version.id === selectedVersionId) ?? selectedItem?.versions[0] ?? null;
+  const storedVersion = selectedItem?.versions.find((version) => version.id === selectedVersionId) ?? selectedItem?.versions[0] ?? null;
+  const inspectVersionId = activePage === 'library' && storedVersion?.state === 'stored' && storedVersion.originalFilename.toLowerCase().endsWith('.zip') ? storedVersion.id : null;
+  const currentPreview = archivePreview?.versionId === inspectVersionId ? archivePreview : null;
+  const selectedVersion = storedVersion && currentPreview?.status === 'ready' ? { ...storedVersion, files: currentPreview.entries.filter((entry) => entry.kind !== 'directory') } : storedVersion;
+
+  useEffect(() => {
+    if (!inspectVersionId) { setArchivePreview(null); return; }
+    let disposed = false;
+    setArchivePreview({ versionId: inspectVersionId, status: 'loading', entries: [] });
+    void client.inspectArchive(inspectVersionId).then((contents) => {
+      if (!disposed) setArchivePreview({ versionId: inspectVersionId, status: 'ready', entries: contents.entries });
+    }).catch((cause: unknown) => {
+      if (!disposed) setArchivePreview({ versionId: inspectVersionId, status: 'error', entries: [] });
+      void client.reportError('inspectArchive', String(cause));
+    });
+    return () => { disposed = true; };
+  }, [inspectVersionId, archivePreviewAttempt]);
   const filteredProjects = useMemo(() => (snapshot?.projects ?? []).filter((project) => `${project.name} ${project.path}`.toLowerCase().includes(query.toLowerCase())), [snapshot, query]);
   const orderedProjects = useMemo(() => {
     const collator = new Intl.Collator(snapshot?.settings.language ?? 'ja');
@@ -90,9 +180,10 @@ function App() {
     });
   }, [filteredProjects, projectSort, snapshot?.settings.language]);
   const filteredItems = useMemo(() => (snapshot?.items ?? []).filter((item) => `${item.title} ${item.versions.map((v) => v.originalFilename).join(' ')}`.toLowerCase().includes(query.toLowerCase())), [snapshot, query]);
-  const visibleSelection = chosenUnityPackages.filter((id) => selectedVersion?.files.some((file) => file.id === id && file.relativePath.toLowerCase().endsWith('.unitypackage')));
+  const visibleSelection = chosenUnityPackages.filter((id) => selectedVersion?.files.some((file) => file.id === id && file.kind === 'unitypackage' && !file.encrypted));
 
   function applySnapshot(next: AppSnapshot) {
+    snapshotGeneration.current += 1;
     setSnapshot(next);
     const selectedItemStillExists = next.items.some((item) => item.id === selectedItemId);
     if (!selectedItemStillExists) {
@@ -103,24 +194,26 @@ function App() {
   }
 
   async function perform<T>(action: () => Promise<T>, success?: (value: T) => string | undefined) {
-    setBusy(true); setError(''); setNotice(''); setImportIssues([]);
+    setBusy(true); setError(''); showNotice(''); setImportIssues([]);
     try {
       const value = await action();
       const message = success?.(value);
-      if (message) setNotice(message);
+      if (message) showNotice(message);
       return value;
     } catch (cause) {
       setError(errorMessage(cause, t('operationError')));
+      void client.reportError('ui.operation', String(cause));
       return undefined;
     } finally { setBusy(false); }
   }
 
   async function openManual() {
-    setBusy(true); setError(''); setNotice(''); setImportIssues([]);
+    setBusy(true); setError(''); showNotice(''); setImportIssues([]);
     try {
       await client.openManual();
     } catch (cause) {
       setError(errorMessage(cause, t('manualOpenError')));
+      void client.reportError('open-manual', String(cause));
     } finally {
       setBusy(false);
     }
@@ -129,15 +222,16 @@ function App() {
   async function registerDeepLink() {
     setBusy(true);
     setError('');
-    setNotice('');
+    showNotice('');
     setDeepLinkError('');
     try {
       const status = await client.registerDeepLink();
       setDeepLinkStatus(status);
-      setNotice(t('deepLinkRegisteredNotice'));
+      showNotice(t('deepLinkRegisteredNotice'));
     } catch (cause) {
       const code = cause instanceof Error ? cause.message : typeof cause === 'string' ? cause : '';
       setDeepLinkError(code === 'BUNDLE_REQUIRED' ? i18n.t('bundleRequired') : t('deepLinkError'));
+      void client.reportError('register-deep-link', String(cause));
     } finally {
       setBusy(false);
     }
@@ -151,7 +245,7 @@ function App() {
       const linked = next.projects.find((project) => !previousIds.has(project.id));
       if (linked) {
         setSelectedProjectId(linked.id);
-        setNotice(t('projectLinked'));
+        showNotice(t('projectLinked'));
       }
     }
   }
@@ -166,7 +260,7 @@ function App() {
         ...result.imported.flatMap((entry) => entry.warnings.map((warning) => ({ filename: latestVersion(entry.item.versions)?.originalFilename ?? entry.item.title, kind: 'warning' as const, message: localizedImportWarning(warning, t) }))),
       ];
       setImportIssues(issues);
-      setNotice(result.imported.length || result.failed.length ? t('importSummary', { imported: result.imported.length, failed: result.failed.length, warnings: issues.filter((issue) => issue.kind === 'warning').length }) : t('noFilesAdded'));
+      showNotice(result.imported.length || result.failed.length ? t('importSummary', { imported: result.imported.length, failed: result.failed.length, warnings: issues.filter((issue) => issue.kind === 'warning').length }) : t('noFilesAdded'));
       const first = result.imported[0]?.item;
       if (first) {
         const latest = latestVersion(first.versions);
@@ -199,10 +293,11 @@ function App() {
     if (!settingsDraft) return;
     const next = await perform(() => client.updateSettings(settingsDraft));
     if (next) {
+      snapshotGeneration.current += 1;
       setSnapshot(next);
       if (i18n.language !== next.settings.language) await i18n.changeLanguage(next.settings.language);
       setSettingsOpen(false);
-      setNotice(t('settingsSaved'));
+      showNotice(t('settingsSaved'));
     }
   }
 
@@ -221,6 +316,7 @@ function App() {
           </nav>
           <div className="nav-bottom">
             <div>
+              <button className="nav-item" type="button" onClick={() => setLogsOpen(true)}><Icon name="logs" size={20} /><span>{t('logs')}</span></button>
               <button className="nav-item" onClick={openManual} disabled={busy}><Icon name="info" size={20} /><span>{t('manual')}</span><Icon name="external" size={12} /></button>
               <button className="nav-item" onClick={openSettings}><Icon name="settings" size={20} /><span>{t('settings')}</span></button>
             </div>
@@ -230,12 +326,13 @@ function App() {
         <main className="page-main">
           <div className="page-scroll">
             {error && <div className="alert error" role="alert"><span>{error}</span><button className="text-button" onClick={() => setError('')}>{t('dismiss')}</button></div>}
-            {notice && <div className="alert" role={importIssues.some((issue) => issue.kind === 'failed') ? 'alert' : 'status'}><div className="alert-content"><span>{notice}</span>{importIssues.length > 0 && <ul className="import-issues">{importIssues.map((issue, index) => <li key={`${issue.filename}-${index}`}><strong>{issue.filename}</strong>: {issue.message}{issue.detail && <details><summary>{t('errorDetails')}</summary><code>{issue.detail}</code></details>}</li>)}</ul>}</div><button className="text-button" onClick={() => { setNotice(''); setImportIssues([]); }}>{t('dismiss')}</button></div>}
-            {isLoading ? <LoadingState label={t('loading')} /> : activePage === 'projects' ? <ProjectsPage projects={orderedProjects} allCount={snapshot?.projects.length ?? 0} selectedId={selectedProjectId} selectedProject={selectedProject} sort={projectSort} onSort={setProjectSort} query={query} onQuery={setQuery} onLink={linkProject} onSelect={(project) => { setSelectedProjectId(project.id); setNotice(t('projectSelected', { name: project.name })); }} busy={busy} t={t} /> : <LibraryPage items={filteredItems} selectedItem={selectedItem} selectedVersion={selectedVersion} query={query} onQuery={setQuery} onAdd={addArchives} onSelect={(item) => { setSelectedItemId(item.id); setSelectedVersionId(latestVersion(item.versions)?.id ?? null); setChosenUnityPackages([]); }} onVersion={(id) => { setSelectedVersionId(id); setChosenUnityPackages([]); }} onExtract={extractSelected} busy={busy} selectedUnityPackages={visibleSelection} onTogglePackage={togglePackage} onMovePackage={movePackage} project={selectedProject} t={t} />}
+            {notice && <div className="alert" role={noticeHasLogAction || importIssues.some((issue) => issue.kind === 'failed') ? 'alert' : 'status'}><div className="alert-content"><span>{notice}</span>{importIssues.length > 0 && <ul className="import-issues">{importIssues.map((issue, index) => <li key={`${issue.filename}-${index}`}><strong>{issue.filename}</strong>: {issue.message}{issue.detail && <details><summary>{t('errorDetails')}</summary><code>{issue.detail}</code></details>}</li>)}</ul>}</div><div className="alert-actions">{noticeHasLogAction && <button className="text-button" onClick={() => setLogsOpen(true)}>{t('deepLinkOpenLogs')}</button>}<button className="text-button" onClick={() => { showNotice(''); setImportIssues([]); }}>{t('dismiss')}</button></div></div>}
+            {isLoading ? <LoadingState label={t('loading')} /> : activePage === 'projects' ? <ProjectsPage projects={orderedProjects} allCount={snapshot?.projects.length ?? 0} selectedId={selectedProjectId} selectedProject={selectedProject} sort={projectSort} onSort={setProjectSort} query={query} onQuery={setQuery} onLink={linkProject} onSelect={(project) => { setSelectedProjectId(project.id); showNotice(t('projectSelected', { name: project.name })); }} busy={busy} t={t} /> : <LibraryPage items={filteredItems} selectedItem={selectedItem} selectedVersion={selectedVersion} query={query} onQuery={setQuery} onAdd={addArchives} onSelect={(item) => { setSelectedItemId(item.id); setSelectedVersionId(latestVersion(item.versions)?.id ?? null); setChosenUnityPackages([]); }} onVersion={(id) => { setSelectedVersionId(id); setChosenUnityPackages([]); }} onExtract={extractSelected} archivePreview={currentPreview} onRetryPreview={() => setArchivePreviewAttempt((value) => value + 1)} busy={busy} selectedUnityPackages={visibleSelection} onTogglePackage={togglePackage} onMovePackage={movePackage} project={selectedProject} t={t} />}
           </div>
           {activePage === 'projects' ? <ProjectGuide t={t} /> : <PackageDetails item={selectedItem} version={selectedVersion} selectedCount={visibleSelection.length} project={selectedProject} busy={busy} onAdd={addArchives} onSettings={openSettings} t={t} />}
         </main>
       </div>
+      {logsOpen && <LogDialog getLogs={client.getLogs} onClose={() => setLogsOpen(false)} t={t} />}
       {settingsOpen && settingsDraft && <SettingsDialog draft={settingsDraft} setDraft={setSettingsDraft} versions={snapshot?.items.flatMap((item) => item.versions.map((version) => ({ itemTitle: item.title, version })) ) ?? []} tab={settingsTab} setTab={setSettingsTab} busy={busy} deepLinkStatus={deepLinkStatus} deepLinkError={deepLinkError} onRegisterDeepLink={registerDeepLink} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onChoosePath={chooseLibraryPath} t={t} />}
     </div>
   );
@@ -276,8 +373,8 @@ function ProjectsPage({ projects, allCount, selectedId, selectedProject, sort, o
   </section>;
 }
 
-function LibraryPage({ items, selectedItem, selectedVersion, query, onQuery, onAdd, onSelect, onVersion, onExtract, busy, selectedUnityPackages, onTogglePackage, onMovePackage, project, t }: { items: LibraryItem[]; selectedItem: LibraryItem | null; selectedVersion: LibraryVersion | null; query: string; onQuery: (value: string) => void; onAdd: () => void; onSelect: (item: LibraryItem) => void; onVersion: (id: string) => void; onExtract: () => void; busy: boolean; selectedUnityPackages: string[]; onTogglePackage: (id: string) => void; onMovePackage: (id: string, direction: -1 | 1) => void; project: Project | null; t: (key: string, options?: Record<string, unknown>) => string }) {
-  const unityFiles = selectedVersion?.files.filter((file) => file.relativePath.toLowerCase().endsWith('.unitypackage')) ?? [];
+function LibraryPage({ items, selectedItem, selectedVersion, query, onQuery, onAdd, onSelect, onVersion, onExtract, archivePreview, onRetryPreview, busy, selectedUnityPackages, onTogglePackage, onMovePackage, project, t }: { items: LibraryItem[]; selectedItem: LibraryItem | null; selectedVersion: LibraryVersion | null; query: string; onQuery: (value: string) => void; onAdd: () => void; onSelect: (item: LibraryItem) => void; onVersion: (id: string) => void; onExtract: () => void; archivePreview: { status: 'loading' | 'ready' | 'error'; entries: ArchiveContents['entries'] } | null; onRetryPreview: () => void; busy: boolean; selectedUnityPackages: string[]; onTogglePackage: (id: string) => void; onMovePackage: (id: string, direction: -1 | 1) => void; project: Project | null; t: (key: string, options?: Record<string, unknown>) => string }) {
+  const unityFiles = selectedVersion?.files.filter((file) => file.kind === 'unitypackage') ?? [];
   const selectedFiles = selectedUnityPackages.map((id) => unityFiles.find((file) => file.id === id)).filter((file): file is NonNullable<typeof file> => Boolean(file));
   return <section className="library-page">
     <div className="page-heading"><div className="heading-title-row"><h1>{t('library')}</h1><button className="button primary" onClick={onAdd} disabled={busy}><Icon name="plus" size={16} />{t('addFiles')}</button></div><p>{t('libraryIntro')}</p></div>
@@ -289,7 +386,9 @@ function LibraryPage({ items, selectedItem, selectedVersion, query, onQuery, onA
         <div className="item-titlebar"><div><h2>{selectedItem.title}</h2><p className="subtle mono">{selectedVersion.originalFilename}</p></div><label className="version-select-label"><span>{t('version')}</span><select value={selectedVersion.id} onChange={(event) => onVersion(event.target.value)} disabled={busy}>{selectedItem.versions.map((version) => <option key={version.id} value={version.id}>{version.label}</option>)}</select></label></div>
         <div className="version-summary"><span className={`status-dot ${selectedVersion.state}`} />{selectedVersion.state === 'extracted' ? t('extracted') : selectedVersion.state === 'ready' ? t('ready') : t('storedOnly')}<span className="mono">{selectedVersion.versionDate}</span><span className="mono">SHA-256 {selectedVersion.contentHash.slice(0, 8)}</span></div>
         <h3>{t('unityPackages')}</h3>
-        {unityFiles.length ? <div className="unity-file-list">{unityFiles.map((file) => <label className="unity-file" key={file.id}><input type="checkbox" checked={selectedUnityPackages.includes(file.id)} disabled={busy} onChange={() => onTogglePackage(file.id)} /><span className="package-icon">UP</span><span className="unity-file-name mono" title={file.relativePath}>{file.relativePath}</span><span className="file-size">{formatBytes(file.sizeBytes)}</span></label>)}</div> : selectedVersion.state === 'stored' ? <div className="inline-empty"><strong>{t('archiveNotExtracted')}</strong><p>{t('archiveNotExtractedHint')}</p><button className="button secondary" onClick={onExtract} disabled={busy}>{t('extractArchive')}</button></div> : <div className="inline-empty">{t('noUnityPackages')}</div>}
+        {archivePreview && <div className="inline-empty"><strong>{t('archiveNotExtracted')}</strong><p>{t('zipBrowseHint')}</p><button className="button secondary" onClick={onExtract} disabled={busy}>{t('extractArchive')}</button></div>}
+        {archivePreview?.status === 'loading' ? <p role="status">{t('archiveLoading')}</p> : archivePreview?.status === 'error' ? <div className="inline-empty" role="alert"><p>{t('archiveReadError')}</p><button className="button secondary" onClick={onRetryPreview} disabled={busy}>{t('archiveRetry')}</button></div> : unityFiles.length ? <div className="unity-file-list">{unityFiles.map((file) => <label className="unity-file" key={file.id}><input type="checkbox" checked={selectedUnityPackages.includes(file.id)} disabled={busy || file.encrypted} onChange={() => onTogglePackage(file.id)} /><span className="package-icon">UP</span><span className="unity-file-name mono" title={file.relativePath}>{file.relativePath}</span><span className="file-size">{file.encrypted ? t('archiveEncrypted') : formatBytes(file.sizeBytes)}</span></label>)}</div> : selectedVersion.state === 'stored' && !archivePreview ? <div className="inline-empty"><strong>{t('archiveNotExtracted')}</strong><p>{t('archiveNotExtractedHint')}</p><button className="button secondary" onClick={onExtract} disabled={busy}>{t('extractArchive')}</button></div> : <div className="inline-empty">{t('noUnityPackages')}</div>}
+        {archivePreview?.status === 'ready' && <ArchiveContentsList key={selectedVersion.id} entries={archivePreview.entries} />}
         {selectedFiles.length > 0 && <div className="selection-box"><div className="selection-heading"><strong>{t('selectedImportOrder')}</strong><span>{t('selectedCount', { count: selectedFiles.length })}</span></div>{selectedFiles.map((file, index) => <div className="selection-item" key={file.id}><Icon name="grip" size={16} /><span className="order-number">{index + 1}</span><span className="mono">{file.relativePath.split('/').at(-1)}</span><span className="order-controls"><button onClick={() => onMovePackage(file.id, -1)} disabled={busy || index === 0} aria-label={t('moveUp')}>↑</button><button onClick={() => onMovePackage(file.id, 1)} disabled={busy || index === selectedFiles.length - 1} aria-label={t('moveDown')}>↓</button></span></div>)}<p>{t('selectionPending')}</p></div>}
       </> : <EmptyState title={t('selectLibraryItem')} body={t('selectLibraryItemHint')} />}</div>
     </div>}
@@ -303,7 +402,7 @@ function PackageDetails({ item, version, selectedCount, project, busy, onAdd, on
     {item && version ? <>
       <div className="rail-identity"><Icon name="disk" size={18} /><strong>{item.title}</strong></div><p className="rail-description">{t('originalFilename')}: <span className="mono">{version.originalFilename}</span></p>
       <hr /><div className="rail-label-row"><strong>{t('includedFiles')}</strong><span>{version.files.length}</span></div>
-      {version.files.slice(0, 6).map((file) => <div className="rail-file" key={file.id}><span className="file-type">{file.relativePath.split('.').at(-1)?.toUpperCase() || 'FILE'}</span><div><span className="file-name mono">{file.relativePath}</span><small>{formatBytes(file.sizeBytes)} · SHA-256 {file.contentHash.slice(0, 8)}</small></div></div>)}
+      {version.files.slice(0, 6).map((file) => <div className="rail-file" key={file.id}><span className="file-type">{file.relativePath.split('.').at(-1)?.toUpperCase() || 'FILE'}</span><div><span className="file-name mono">{file.relativePath}</span><small>{formatBytes(file.sizeBytes)} · {file.contentHash ? `SHA-256 ${file.contentHash.slice(0, 8)}` : t('hashOnImport')}</small></div></div>)}
       {version.files.length > 6 && <p className="subtle">{t('moreFiles', { count: version.files.length - 6 })}</p>}
       <hr /><div className="rail-label-row"><strong>{t('version')}</strong><span className="mono">{version.label}</span></div><p className="subtle mono">SHA-256 {version.contentHash}</p>
       <div className="rail-state"><strong>{version.state === 'extracted' ? t('extracted') : version.state === 'ready' ? t('ready') : t('storedOnly')}</strong><p>{version.state === 'ready' ? t('readyHint') : t('storedStatusHint')}</p></div>
@@ -373,6 +472,5 @@ function localizedImportWarning(warning: string, t: (key: string) => string) {
 function latestVersion(versions: LibraryVersion[]) {
   return versions.reduce<LibraryVersion | null>((latest, version) => !latest || version.versionDate > latest.versionDate ? version : latest, null);
 }
-function formatBytes(size: number) { if (size < 1024) return `${size} B`; if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`; return `${(size / (1024 * 1024)).toFixed(1)} MB`; }
 
 export default App;

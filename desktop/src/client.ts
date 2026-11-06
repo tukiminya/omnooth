@@ -1,7 +1,7 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { listen } from '@tauri-apps/api/event';
-import type { AppSettings, AppSnapshot, ArchiveBatchResult, DeepLinkStatus, ImportResult } from './contracts';
+import type { AppSettings, AppSnapshot, ArchiveBatchResult, ArchiveContents, DeepLinkStatus, ImportResult, LogSnapshot } from './contracts';
 
 const desktop = isTauri();
 
@@ -55,6 +55,18 @@ export const client = {
       if (tab) tab.opener = null;
     }
   },
+  async getLogs(): Promise<LogSnapshot> {
+    if (!desktop) return { sessionId: '', entries: [] };
+    return invoke<LogSnapshot>('get_logs');
+  },
+  async reportError(operation: string, message: string): Promise<void> {
+    if (!desktop) return;
+    try {
+      await invoke('report_client_error', { operation, message });
+    } catch {
+      // Reporting failures must not create another reportable error.
+    }
+  },
   async chooseProject(): Promise<AppSnapshot> {
     requireDesktop();
     const path = await open({ directory: true, multiple: false });
@@ -86,6 +98,9 @@ export const client = {
   async extractArchive(versionId: string): Promise<AppSnapshot> {
     await dispatch('extractArchive', { versionId });
     return getSnapshot();
+  },
+  async inspectArchive(versionId: string): Promise<ArchiveContents> {
+    return dispatch('inspectArchive', { versionId });
   },
   async chooseLibraryPath(): Promise<string | null> {
     requireDesktop();

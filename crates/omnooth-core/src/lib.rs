@@ -15,11 +15,21 @@ use uuid::Uuid;
 use zip::ZipArchive;
 
 mod deep_link;
+pub use booth_download::{
+    download_booth_archive, download_booth_archive_with_progress, fetch_booth_item_metadata,
+    fetch_booth_item_title, BoothItemMetadata, DownloadedBoothArchive,
+};
 pub use deep_link::{parse_item_import_deep_link, ItemImportReceipt, ParsedItemImport};
+mod archive_contents;
+mod booth_download;
+pub use archive_contents::{
+    ArchiveContents, ArchiveEntry, PreparedUnityImport, PreparedUnityPackage,
+};
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 4;
 const MAX_ARCHIVE_ENTRIES: usize = 100_000;
 const MAX_EXPANDED_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+const MAX_BOOTH_DOWNLOAD_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
@@ -31,6 +41,10 @@ pub enum CoreError {
     Database(#[from] rusqlite::Error),
     #[error("{0}")]
     Archive(String),
+    #[error("{0}")]
+    Download(&'static str),
+    #[error("DOWNLOAD_HTTP_ERROR ({0})")]
+    DownloadHttpStatus(u16),
 }
 
 impl CoreError {
@@ -39,6 +53,8 @@ impl CoreError {
             Self::Invalid(code) => code,
             Self::Io(_) => "IO_ERROR",
             Self::Database(_) => "DATABASE_ERROR",
+            Self::Download(code) => code,
+            Self::DownloadHttpStatus(_) => "DOWNLOAD_HTTP_ERROR",
             Self::Archive(message) => match message.split(':').next().unwrap_or("") {
                 "ARCHIVE_UNSAFE" => "ARCHIVE_UNSAFE",
                 "ARCHIVE_TOO_MANY_ENTRIES" => "ARCHIVE_TOO_MANY_ENTRIES",
@@ -52,6 +68,14 @@ impl CoreError {
                 "ARCHIVE_SIZE_MISMATCH" => "ARCHIVE_SIZE_MISMATCH",
                 _ => "ARCHIVE_INVALID",
             },
+        }
+    }
+
+    /// Safe diagnostic detail for UI/activity logging. Never contains request URLs or bodies.
+    pub fn safe_detail(&self) -> Option<String> {
+        match self {
+            Self::DownloadHttpStatus(status) => Some(status.to_string()),
+            _ => None,
         }
     }
 }
@@ -137,6 +161,7 @@ pub enum ApplicationCommand {
     GetSnapshot,
     LinkProject { directory_path: PathBuf },
     ImportArchive(ImportArchiveInput),
+    InspectArchive { version_id: String },
     ExtractArchive { version_id: String },
     UpdateSettings { settings: AppSettings },
 }
@@ -188,6 +213,174 @@ impl Service {
         Self::open(new_app_data_dir)
     }
 
+    /// App-managed staging directory for downloads. No user-controlled path is used.
+    pub fn booth_download_staging_dir(&self) -> PathBuf {
+        self.app_data_dir.join("downloads")
+    }
+
+    /// Imports a completed BOOTH download into the local library and registers its stable
+    /// source identity. The signed URL is never persisted or included in errors.
+    pub fn import_booth_download(
+        &self,
+        request: &ParsedItemImport,
+        downloaded: DownloadedBoothArchive,
+        title: Option<&str>,
+        extract_archive: bool,
+        library_path: Option<&Path>,
+    ) -> CoreResult<ImportResult> {
+        let metadata = title.map(|title| BoothItemMetadata {
+            title: Some(title.to_owned()),
+            source_updated_at: None,
+        });
+        self.import_booth_download_with_metadata(
+            request,
+            downloaded,
+            metadata.as_ref(),
+            extract_archive,
+            library_path,
+        )
+    }
+
+    /// Metadata variant used by workers that successfully fetched public BOOTH metadata.
+    pub fn import_booth_download_with_metadata(
+        &self,
+        request: &ParsedItemImport,
+        downloaded: DownloadedBoothArchive,
+        metadata: Option<&BoothItemMetadata>,
+        extract_archive: bool,
+        library_path: Option<&Path>,
+    ) -> CoreResult<ImportResult> {
+        let receipt = request.receipt();
+        let filename = receipt.filename.clone();
+        let staged_metadata = fs::metadata(&downloaded.archive_path)
+            .map_err(|_| CoreError::Download("DOWNLOAD_IO_ERROR"))?;
+        if !staged_metadata.is_file()
+            || staged_metadata.len() != downloaded.size_bytes()
+            || hash_file(&downloaded.archive_path)
+                .map_err(|_| CoreError::Download("DOWNLOAD_IO_ERROR"))?
+                != downloaded.sha256()
+        {
+            return Err(CoreError::Download("DOWNLOAD_HASH_MISMATCH"));
+        }
+        let input = ImportArchiveInput {
+            archive_path: downloaded.archive_path.clone(),
+            original_filename: filename.clone(),
+            extract_archive,
+            item_id: self
+                .booth_package_for_source(&receipt.source_identity, &receipt.booth_item_id)?,
+        };
+        let identity_override = format!("booth:item:{}", receipt.booth_item_id);
+        let source_updated_at = metadata.and_then(|metadata| metadata.source_updated_at.as_deref());
+        let result = self.import_archive_at_library(
+            input,
+            library_path,
+            Some(&identity_override),
+            source_updated_at,
+        )?;
+        if !result
+            .item
+            .versions
+            .iter()
+            .any(|version| version.content_hash == downloaded.sha256())
+        {
+            return Err(CoreError::Download("DOWNLOAD_HASH_MISMATCH"));
+        }
+        self.register_booth_source(
+            &result.item.id,
+            &receipt.booth_item_id,
+            receipt.variation_id.as_deref(),
+            &receipt.source_identity,
+            &filename,
+            metadata.and_then(|metadata| metadata.title.as_deref()),
+        )?;
+        let _ = fs::remove_file(&downloaded.archive_path);
+        Ok(ImportResult {
+            item: self.load_item_by_id(&result.item.id)?,
+            reused: result.reused,
+            warnings: result.warnings,
+        })
+    }
+
+    fn booth_package_for_source(
+        &self,
+        source_identity: &str,
+        booth_item_id: &str,
+    ) -> CoreResult<Option<String>> {
+        let conn = self.connect()?;
+        let exact = conn
+            .query_row(
+                "SELECT package_id FROM booth_sources WHERE source_identity=?1",
+                [source_identity],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if exact.is_some() {
+            return Ok(exact);
+        }
+        Ok(conn
+            .query_row(
+                "SELECT id FROM packages WHERE booth_item_id=?1",
+                [booth_item_id],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    fn register_booth_source(
+        &self,
+        package_id: &str,
+        booth_item_id: &str,
+        variation_id: Option<&str>,
+        source_identity: &str,
+        filename: &str,
+        title: Option<&str>,
+    ) -> CoreResult<()> {
+        let conn = self.connect()?;
+        let tx = conn.unchecked_transaction()?;
+        let linked_package: Option<String> = tx
+            .query_row(
+                "SELECT id FROM packages WHERE booth_item_id=?1",
+                [booth_item_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let linked_package = match linked_package {
+            Some(existing) => existing,
+            None => {
+                tx.execute(
+                    "UPDATE packages SET booth_item_id=?2 WHERE id=?1 AND booth_item_id IS NULL",
+                    params![package_id, booth_item_id],
+                )?;
+                package_id.to_owned()
+            }
+        };
+        let winner: Option<String> = tx
+            .query_row(
+                "SELECT package_id FROM booth_sources WHERE source_identity=?1",
+                [source_identity],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let final_package = winner.unwrap_or(linked_package);
+        tx.execute("INSERT OR IGNORE INTO booth_sources(source_identity,booth_item_id,variation_id,filename,package_id,created_at) VALUES (?1,?2,?3,?4,?5,?6)", params![source_identity,booth_item_id,variation_id,filename,final_package,now()])?;
+        if let Some(title) = title.and_then(booth_download::sanitize_booth_title) {
+            tx.execute(
+                "UPDATE packages SET title=?2 WHERE id=?1",
+                params![final_package, title],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn load_item_by_id(&self, id: &str) -> CoreResult<LibraryItem> {
+        let conn = self.connect()?;
+        let title = conn.query_row("SELECT title FROM packages WHERE id=?1", [id], |row| {
+            row.get(0)
+        })?;
+        load_item(&conn, id.to_owned(), title)
+    }
+
     fn connect(&self) -> CoreResult<Connection> {
         let conn = Connection::open(&self.db_path)?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
@@ -236,6 +429,9 @@ impl Service {
             }
             ApplicationCommand::ImportArchive(input) => {
                 serde_json::to_value(self.import_archive(input)?)
+            }
+            ApplicationCommand::InspectArchive { version_id } => {
+                serde_json::to_value(self.inspect_archive(&version_id)?)
             }
             ApplicationCommand::ExtractArchive { version_id } => {
                 serde_json::to_value(self.extract_archive(&version_id)?)
@@ -294,10 +490,20 @@ impl Service {
     }
 
     /// Saves an immutable source object and creates/reuses its date+SHA-256 version.
-    /// BOOTH metadata is not connected yet, so the version date is the UTC import date.
+    /// Local imports use the UTC import date; BOOTH imports may provide an exact source update date.
     /// A `.unitypackage` is accepted by extension and preserved byte-for-byte; its internal
     /// gzip/tar structure is not parsed in this MVP. ZIP signatures are checked against names.
     pub fn import_archive(&self, input: ImportArchiveInput) -> CoreResult<ImportResult> {
+        self.import_archive_at_library(input, None, None, None)
+    }
+
+    fn import_archive_at_library(
+        &self,
+        input: ImportArchiveInput,
+        library_override: Option<&Path>,
+        identity_override: Option<&str>,
+        source_updated_at: Option<&str>,
+    ) -> CoreResult<ImportResult> {
         validate_filename(&input.original_filename)?;
         let format = import_format(&input.original_filename)?;
         let metadata = fs::metadata(&input.archive_path)?;
@@ -314,12 +520,52 @@ impl Service {
         let mut warnings = Vec::new();
         let mut state = "stored".to_string();
         let mut files = Vec::new();
-        let library = self.current_library_path()?;
+        let library = match library_override {
+            Some(path) if path.is_absolute() => path.to_path_buf(),
+            Some(_) => return Err(CoreError::Invalid("INVALID_LIBRARY_PATH")),
+            None => self.current_library_path()?,
+        };
+        fs::create_dir_all(library.join("objects"))?;
+        fs::create_dir_all(library.join("extracted"))?;
         let conn = self.connect()?;
+        let identity_filename = identity_override.unwrap_or(&input.original_filename);
+        let package_id = if let Some(id) = input.item_id.as_deref() {
+            conn.query_row("SELECT id FROM packages WHERE id=?1", [id], |r| {
+                r.get::<_, String>(0)
+            })
+            .optional()?
+            .ok_or(CoreError::Invalid("ITEM_NOT_FOUND"))?
+        } else if let Some(id) = conn
+            .query_row(
+                "SELECT id FROM packages WHERE identity_filename=?1",
+                [identity_filename],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?
+        {
+            id
+        } else {
+            Uuid::new_v4().to_string()
+        };
+        let new_package = conn
+            .query_row("SELECT 1 FROM packages WHERE id=?1", [&package_id], |r| {
+                r.get::<_, i32>(0)
+            })
+            .optional()?
+            .is_none();
+        let title = if new_package {
+            filename_stem(&input.original_filename)
+        } else {
+            conn.query_row(
+                "SELECT title FROM packages WHERE id=?1",
+                [&package_id],
+                |r| r.get::<_, String>(0),
+            )?
+        };
         let existing = conn
             .query_row(
-                "SELECT id,package_id,state FROM package_versions WHERE content_hash=?1",
-                [&hash],
+                "SELECT id,package_id,state FROM package_versions WHERE package_id=?1 AND content_hash=?2",
+                params![package_id, hash],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -351,39 +597,6 @@ impl Service {
                 warnings,
             });
         }
-        let package_id = if let Some(id) = input.item_id.as_deref() {
-            conn.query_row("SELECT id FROM packages WHERE id=?1", [id], |r| {
-                r.get::<_, String>(0)
-            })
-            .optional()?
-            .ok_or(CoreError::Invalid("ITEM_NOT_FOUND"))?
-        } else if let Some(id) = conn
-            .query_row(
-                "SELECT id FROM packages WHERE identity_filename=?1",
-                [&input.original_filename],
-                |r| r.get::<_, String>(0),
-            )
-            .optional()?
-        {
-            id
-        } else {
-            Uuid::new_v4().to_string()
-        };
-        let new_package = conn
-            .query_row("SELECT 1 FROM packages WHERE id=?1", [&package_id], |r| {
-                r.get::<_, i32>(0)
-            })
-            .optional()?
-            .is_none();
-        let title = if new_package {
-            filename_stem(&input.original_filename)
-        } else {
-            conn.query_row(
-                "SELECT title FROM packages WHERE id=?1",
-                [&package_id],
-                |r| r.get::<_, String>(0),
-            )?
-        };
         let object_path = library.join("objects").join(&hash);
         atomic_copy(&input.archive_path, &object_path, &hash)?;
         if direct_unitypackage {
@@ -427,7 +640,12 @@ impl Service {
         }
         let version_id = Uuid::new_v4().to_string();
         let imported_at = now();
-        let version_date = imported_at[..10].to_string();
+        let source_updated_at = source_updated_at.and_then(normalize_source_updated_at);
+        let version_date = source_updated_at
+            .as_deref()
+            .and_then(|updated| chrono::DateTime::parse_from_rfc3339(updated).ok())
+            .map(|updated| updated.with_timezone(&Utc).format("%Y-%m-%d").to_string())
+            .unwrap_or_else(|| imported_at[..10].to_string());
         let extracted_path = if state == "extracted" {
             object_path.parent().and_then(Path::parent).map(|p| {
                 p.join("extracted")
@@ -443,10 +661,10 @@ impl Service {
         if new_package {
             tx.execute(
                 "INSERT INTO packages(id,title,identity_filename,created_at) VALUES (?1,?2,?3,?4)",
-                params![package_id, title, input.original_filename, imported_at],
+                params![package_id, title, identity_filename, imported_at],
             )?;
         }
-        tx.execute("INSERT INTO package_versions(id,package_id,original_filename,content_hash,version_date,state,object_path,extracted_path,imported_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![version_id,package_id,input.original_filename,hash,version_date,state,object_path.to_string_lossy(),extracted_path,imported_at])?;
+        tx.execute("INSERT INTO package_versions(id,package_id,original_filename,content_hash,version_date,state,object_path,extracted_path,imported_at,source_updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",params![version_id,package_id,input.original_filename,hash,version_date,state,object_path.to_string_lossy(),extracted_path,imported_at,source_updated_at])?;
         for file in files {
             tx.execute("INSERT INTO package_files(id,version_id,relative_path,kind,size_bytes,content_hash) VALUES (?1,?2,?3,?4,?5,?6)",params![file.id,version_id,file.relative_path,file.kind,file.size_bytes as i64,file.content_hash])?;
         }
@@ -602,11 +820,47 @@ fn migrate(conn: &mut Connection) -> CoreResult<()> {
         tx.execute_batch("\
           CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,canonical_path TEXT NOT NULL,dedupe_path TEXT NOT NULL UNIQUE,unity_version TEXT NOT NULL,linked_at TEXT NOT NULL);\
           CREATE TABLE packages(id TEXT PRIMARY KEY,title TEXT NOT NULL,identity_filename TEXT NOT NULL UNIQUE,created_at TEXT NOT NULL);\
-          CREATE TABLE package_versions(id TEXT PRIMARY KEY,package_id TEXT NOT NULL REFERENCES packages(id) ON DELETE CASCADE,original_filename TEXT NOT NULL,content_hash TEXT NOT NULL UNIQUE CHECK(length(content_hash)=64),version_date TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('stored','extracted','ready')),object_path TEXT NOT NULL,extracted_path TEXT,imported_at TEXT NOT NULL,UNIQUE(package_id,content_hash));\
+          CREATE TABLE package_versions(id TEXT PRIMARY KEY,package_id TEXT NOT NULL REFERENCES packages(id) ON DELETE CASCADE,original_filename TEXT NOT NULL,content_hash TEXT NOT NULL CHECK(length(content_hash)=64),version_date TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('stored','extracted','ready')),object_path TEXT NOT NULL,extracted_path TEXT,imported_at TEXT NOT NULL,UNIQUE(package_id,content_hash));\
           CREATE TABLE package_files(id TEXT PRIMARY KEY,version_id TEXT NOT NULL REFERENCES package_versions(id) ON DELETE CASCADE,relative_path TEXT NOT NULL,kind TEXT NOT NULL,size_bytes INTEGER NOT NULL CHECK(size_bytes>=0),content_hash TEXT NOT NULL CHECK(length(content_hash)=64),UNIQUE(version_id,relative_path));\
           CREATE TABLE app_settings(id INTEGER PRIMARY KEY CHECK(id=1),language TEXT NOT NULL CHECK(language IN ('ja','en','ko')),library_path TEXT NOT NULL,extract_archives INTEGER NOT NULL DEFAULT 0 CHECK(extract_archives IN (0,1)),privacy_notice_acknowledged_at TEXT,keep_old_versions INTEGER NOT NULL DEFAULT 1 CHECK(keep_old_versions IN (0,1)),updated_at TEXT NOT NULL);\
         ")?;
-        tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        tx.pragma_update(None, "user_version", 1)?;
+        tx.commit()?;
+    }
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version < 2 {
+        let tx = conn.transaction()?;
+        tx.execute_batch("\
+          ALTER TABLE packages ADD COLUMN booth_item_id TEXT;\
+          CREATE UNIQUE INDEX packages_booth_item_id_unique ON packages(booth_item_id) WHERE booth_item_id IS NOT NULL;\
+          CREATE TABLE booth_sources(source_identity TEXT PRIMARY KEY,booth_item_id TEXT NOT NULL,variation_id TEXT,filename TEXT NOT NULL,package_id TEXT NOT NULL REFERENCES packages(id) ON DELETE CASCADE,created_at TEXT NOT NULL);\
+          CREATE INDEX booth_sources_item ON booth_sources(booth_item_id);\
+        ")?;
+        tx.pragma_update(None, "user_version", 2)?;
+        tx.commit()?;
+    }
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version < 3 {
+        let tx = conn.transaction()?;
+        tx.execute_batch("\
+          CREATE TABLE package_versions_v3(id TEXT PRIMARY KEY,package_id TEXT NOT NULL REFERENCES packages(id) ON DELETE CASCADE,original_filename TEXT NOT NULL,content_hash TEXT NOT NULL CHECK(length(content_hash)=64),version_date TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('stored','extracted','ready')),object_path TEXT NOT NULL,extracted_path TEXT,imported_at TEXT NOT NULL,UNIQUE(package_id,content_hash));\
+          INSERT INTO package_versions_v3(id,package_id,original_filename,content_hash,version_date,state,object_path,extracted_path,imported_at) SELECT id,package_id,original_filename,content_hash,version_date,state,object_path,extracted_path,imported_at FROM package_versions;\
+          CREATE TABLE package_files_v3_backup AS SELECT id,version_id,relative_path,kind,size_bytes,content_hash FROM package_files;\
+          DROP TABLE package_files;\
+          DROP TABLE package_versions;\
+          ALTER TABLE package_versions_v3 RENAME TO package_versions;\
+          CREATE TABLE package_files(id TEXT PRIMARY KEY,version_id TEXT NOT NULL REFERENCES package_versions(id) ON DELETE CASCADE,relative_path TEXT NOT NULL,kind TEXT NOT NULL,size_bytes INTEGER NOT NULL CHECK(size_bytes>=0),content_hash TEXT NOT NULL CHECK(length(content_hash)=64),UNIQUE(version_id,relative_path));\
+          INSERT INTO package_files(id,version_id,relative_path,kind,size_bytes,content_hash) SELECT id,version_id,relative_path,kind,size_bytes,content_hash FROM package_files_v3_backup;\
+          DROP TABLE package_files_v3_backup;\
+        ")?;
+        tx.pragma_update(None, "user_version", 3)?;
+        tx.commit()?;
+    }
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version < 4 {
+        let tx = conn.transaction()?;
+        tx.execute_batch("ALTER TABLE package_versions ADD COLUMN source_updated_at TEXT;")?;
+        tx.pragma_update(None, "user_version", 4)?;
         tx.commit()?;
     }
     Ok(())
@@ -649,6 +903,15 @@ fn validate_filename(name: &str) -> CoreResult<()> {
         return Err(CoreError::Invalid("INVALID_FILENAME"));
     }
     Ok(())
+}
+
+fn normalize_source_updated_at(value: &str) -> Option<String> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|date| {
+            date.with_timezone(&Utc)
+                .to_rfc3339_opts(SecondsFormat::AutoSi, true)
+        })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -813,7 +1076,11 @@ fn reconcile_object(source: &Path, destination: &Path, expected_hash: &str) -> C
 
 fn safe_member_path(name: &str) -> CoreResult<PathBuf> {
     let path = Path::new(name);
-    if path.as_os_str().is_empty() || path.is_absolute() || name.contains('\\') {
+    if path.as_os_str().is_empty()
+        || path.is_absolute()
+        || name.contains(['\\', ':', '\0'])
+        || name.chars().any(char::is_control)
+    {
         return Err(CoreError::Archive("ARCHIVE_UNSAFE".into()));
     }
     let mut out = PathBuf::new();
@@ -1049,6 +1316,21 @@ mod tests {
         format!("{:x}", Sha256::digest(bytes))
     }
 
+    fn booth_request(filename: &str) -> ParsedItemImport {
+        let encoded_filename = filename.replace('.', "%2E");
+        parse_item_import_deep_link(&format!("booth-library-manager://item-import?dlurl=https%3A%2F%2Fs6.booth.pm%2Ffiles%2Fitem.zip%3FX-Amz-Date%3D20261028T000000Z%26X-Amz-Expires%3D86400&downloadable_filename={encoded_filename}&item_id=8596249&variation_id=14346065" )).unwrap()
+    }
+
+    fn staged_download(dir: &Path, name: &str, bytes: &[u8]) -> DownloadedBoothArchive {
+        let path = dir.join(name);
+        fs::write(&path, bytes).unwrap();
+        DownloadedBoothArchive {
+            archive_path: path,
+            sha256: hex_hash(bytes),
+            size_bytes: bytes.len() as u64,
+        }
+    }
+
     fn set_zip_unix_member_type(path: &Path, mode: u32) {
         let mut bytes = fs::read(path).unwrap();
         let central = bytes
@@ -1077,6 +1359,50 @@ mod tests {
     }
 
     #[test]
+    fn upgrades_v1_schema_and_preserves_existing_versions_and_files() {
+        let dir = temp();
+        let db_path = dir.join("omnooth.sqlite");
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch("\
+          CREATE TABLE packages(id TEXT PRIMARY KEY,title TEXT NOT NULL,identity_filename TEXT NOT NULL UNIQUE,created_at TEXT NOT NULL);\
+          CREATE TABLE package_versions(id TEXT PRIMARY KEY,package_id TEXT NOT NULL REFERENCES packages(id) ON DELETE CASCADE,original_filename TEXT NOT NULL,content_hash TEXT NOT NULL UNIQUE CHECK(length(content_hash)=64),version_date TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('stored','extracted','ready')),object_path TEXT NOT NULL,extracted_path TEXT,imported_at TEXT NOT NULL,UNIQUE(package_id,content_hash));\
+          CREATE TABLE package_files(id TEXT PRIMARY KEY,version_id TEXT NOT NULL REFERENCES package_versions(id) ON DELETE CASCADE,relative_path TEXT NOT NULL,kind TEXT NOT NULL,size_bytes INTEGER NOT NULL CHECK(size_bytes>=0),content_hash TEXT NOT NULL CHECK(length(content_hash)=64),UNIQUE(version_id,relative_path));\
+          CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,canonical_path TEXT NOT NULL,dedupe_path TEXT NOT NULL UNIQUE,unity_version TEXT NOT NULL,linked_at TEXT NOT NULL);\
+          CREATE TABLE app_settings(id INTEGER PRIMARY KEY CHECK(id=1),language TEXT NOT NULL CHECK(language IN ('ja','en','ko')),library_path TEXT NOT NULL,extract_archives INTEGER NOT NULL DEFAULT 0 CHECK(extract_archives IN (0,1)),privacy_notice_acknowledged_at TEXT,keep_old_versions INTEGER NOT NULL DEFAULT 1 CHECK(keep_old_versions IN (0,1)),updated_at TEXT NOT NULL);\
+          INSERT INTO packages VALUES('p','Legacy','legacy.zip','2026-01-01T00:00:00Z');\
+          INSERT INTO package_versions VALUES('v','p','legacy.zip','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','2026-01-01','stored','/old/objects/legacy',NULL,'2026-01-01T00:00:00Z');\
+          INSERT INTO package_files VALUES('f','v','nested/package.unitypackage','unitypackage',5,'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');\
+          PRAGMA user_version=1;\
+        ").unwrap();
+        drop(conn);
+        let service = Service::open(&dir).unwrap();
+        let conn = service.connect().unwrap();
+        let version: i64 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 4);
+        let file_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM package_files WHERE version_id='v'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(file_count, 1);
+        let booth_item_id: Option<String> = conn
+            .query_row(
+                "SELECT booth_item_id FROM packages WHERE id='p'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(booth_item_id, None);
+        drop(conn);
+        drop(service);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn parses_the_shared_tagged_command_envelope() {
         let parsed: ApplicationCommand=serde_json::from_value(serde_json::json!({"type":"importArchive","input":{"archivePath":"/tmp/a.zip","originalFilename":"A.zip","extractArchive":false,"itemId":null}})).unwrap();
         match parsed {
@@ -1086,6 +1412,108 @@ mod tests {
             }
             _ => panic!("wrong command variant"),
         }
+    }
+
+    #[test]
+    fn booth_import_registers_product_title_source_identity_and_new_versions() {
+        let dir = temp();
+        let service = Service::open(&dir).unwrap();
+        let request = booth_request("costume.zip");
+        let staging = service.booth_download_staging_dir();
+        fs::create_dir_all(&staging).unwrap();
+        let first = staged_download(&staging, "first.download", b"PK\x03\x04first archive");
+        let metadata = BoothItemMetadata {
+            title: Some("Costume Booth Title".into()),
+            source_updated_at: Some("2026-08-18T00:30:00+09:00".into()),
+        };
+        let imported = service
+            .import_booth_download_with_metadata(&request, first, Some(&metadata), false, None)
+            .unwrap();
+        assert_eq!(imported.item.title, "Costume Booth Title");
+        assert_eq!(imported.item.versions.len(), 1);
+        assert_eq!(imported.item.versions[0].version_date, "2026-08-17");
+        assert!(!staging.join("first.download").exists());
+
+        let second = staged_download(&staging, "second.download", b"PK\x03\x04second archive");
+        let updated = service
+            .import_booth_download(&request, second, Some("Updated Title"), false, None)
+            .unwrap();
+        assert_eq!(updated.item.id, imported.item.id);
+        assert_eq!(updated.item.title, "Updated Title");
+        assert_eq!(updated.item.versions.len(), 2);
+        let conn = service.connect().unwrap();
+        let linked: (String, String, Option<String>) = conn.query_row(
+            "SELECT booth_item_id,source_identity,variation_id FROM booth_sources WHERE package_id=?1",
+            [&imported.item.id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).unwrap();
+        assert_eq!(linked.0, "8596249");
+        assert_eq!(linked.1, request.receipt().source_identity);
+        assert_eq!(linked.2.as_deref(), Some("14346065"));
+        drop(conn);
+        drop(service);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn booth_product_with_identical_local_content_gets_its_own_logical_item() {
+        let dir = temp();
+        let service = Service::open(&dir).unwrap();
+        let local_source = dir.join("local.zip");
+        let archive = b"PK\x03\x04same archive bytes";
+        fs::write(&local_source, archive).unwrap();
+        let local = service
+            .import_archive(ImportArchiveInput {
+                archive_path: local_source,
+                original_filename: "local.zip".into(),
+                extract_archive: false,
+                item_id: None,
+            })
+            .unwrap();
+
+        let request = booth_request("booth-copy.zip");
+        let staging = service.booth_download_staging_dir();
+        fs::create_dir_all(&staging).unwrap();
+        let downloaded = staged_download(&staging, "same.download", archive);
+        let booth = service
+            .import_booth_download(&request, downloaded, Some("BOOTH title"), false, None)
+            .unwrap();
+        assert_ne!(local.item.id, booth.item.id);
+        assert_eq!(booth.item.title, "BOOTH title");
+        assert_eq!(
+            booth.item.versions[0].content_hash,
+            local.item.versions[0].content_hash
+        );
+        let conn = service.connect().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM package_versions WHERE content_hash=?1",
+                [&booth.item.versions[0].content_hash],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+        drop(conn);
+        drop(service);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn booth_import_rejects_changed_staged_download_before_library_registration() {
+        let dir = temp();
+        let service = Service::open(&dir).unwrap();
+        let request = booth_request("costume.zip");
+        let staging = service.booth_download_staging_dir();
+        fs::create_dir_all(&staging).unwrap();
+        let downloaded = staged_download(&staging, "changed.download", b"PK\x03\x04original bytes");
+        fs::write(&downloaded.archive_path, b"PK\x03\x04changed bytes").unwrap();
+        let error = service
+            .import_booth_download(&request, downloaded, None, false, None)
+            .unwrap_err();
+        assert_eq!(error.code(), "DOWNLOAD_HASH_MISMATCH");
+        assert!(service.snapshot().unwrap().items.is_empty());
+        drop(service);
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

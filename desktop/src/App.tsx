@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 import i18n from './i18n';
 import { client } from './client';
 import { Icon } from './Icon';
 import { LogDialog } from './LogDialog';
+import { AppToaster } from './AppToaster';
 import { ArchiveContentsList } from './ArchiveContentsList';
 import { formatBytes } from './formatBytes';
 import type { AppSettings, AppSnapshot, ArchiveContents, DeepLinkStatus, LibraryItem, LibraryVersion, Project } from './contracts';
@@ -12,6 +14,7 @@ import './app.css';
 
 type Page = 'projects' | 'library';
 type SettingsTab = 'general' | 'history';
+const appErrorToastId = 'app-error';
 
 function App() {
   const { t, i18n } = useTranslation();
@@ -32,10 +35,6 @@ function App() {
   const [deepLinkError, setDeepLinkError] = useState('');
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState('');
-  const [noticeHasLogAction, setNoticeHasLogAction] = useState(false);
-  const [importIssues, setImportIssues] = useState<Array<{ filename: string; kind: 'warning' | 'failed'; message: string; detail?: string }>>([]);
-  const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const lastReceiptKey = useRef<string | null>(null);
   const latestImportStateSignature = useRef(new Map<number, string>());
@@ -43,21 +42,16 @@ function App() {
   const refreshingImportJobs = useRef(new Set<number>());
   const snapshotGeneration = useRef(0);
 
-  function showNotice(message: string, showLogAction = false) {
-    setNotice(message);
-    setNoticeHasLogAction(showLogAction);
-  }
-
   async function refreshForDeepLinkImport(importResult: NonNullable<DeepLinkStatus['lastImport']>, navigateToLibrary: boolean): Promise<boolean> {
     const generation = ++snapshotGeneration.current;
     try {
       const next = await client.getSnapshot();
       if (generation !== snapshotGeneration.current) return true;
       setSnapshot(next);
-      setError('');
+      toast.dismiss(appErrorToastId);
       const item = importResult.itemId ? next.items.find((candidate) => candidate.id === importResult.itemId) : null;
       if (!item) {
-        if (importResult.itemId) setError(t('deepLinkRefreshError'));
+        if (importResult.itemId) toast.error(t('deepLinkRefreshError'), { id: appErrorToastId, duration: Infinity });
         return !importResult.itemId;
       }
       setSelectedItemId(item.id);
@@ -66,7 +60,7 @@ function App() {
       if (navigateToLibrary) setActivePage('library');
       return true;
     } catch (cause) {
-      if (generation === snapshotGeneration.current) setError(errorMessage(cause, t('deepLinkRefreshError')));
+      if (generation === snapshotGeneration.current) toast.error(errorMessage(cause, t('deepLinkRefreshError')), { id: appErrorToastId, duration: Infinity });
       void client.reportError('deep-link-library-refresh', String(cause));
       return false;
     }
@@ -85,16 +79,17 @@ function App() {
       });
     }
     if (!isNewTransition) return;
-    setImportIssues([]);
     const common = { filename: status.filename, count: activeCount ?? 1 };
+    const options = { id: `booth-import-${status.jobId}`, duration: Infinity, action: undefined };
+    const logAction = { label: t('deepLinkOpenLogs'), onClick: () => setLogsOpen(true) };
     switch (status.state) {
-      case 'queued': showNotice(t('deepLinkQueued', common)); break;
-      case 'downloading': showNotice(t('deepLinkDownloading', common)); break;
-      case 'importing': showNotice(t('deepLinkImporting', common)); break;
-      case 'awaitingUrl': showNotice(t('deepLinkAwaitingUrl', common), true); break;
-      case 'failed': showNotice(t('deepLinkImportFailed', { ...common, reason: status.errorCode ?? t('deepLinkUnknownReason') }), true); break;
+      case 'queued': toast.loading(t('deepLinkQueued', common), options); break;
+      case 'downloading': toast.loading(t('deepLinkDownloading', common), options); break;
+      case 'importing': toast.loading(t('deepLinkImporting', common), options); break;
+      case 'awaitingUrl': toast.warning(t('deepLinkAwaitingUrl', common), { ...options, action: logAction }); break;
+      case 'failed': toast.error(t('deepLinkImportFailed', { ...common, reason: status.errorCode ?? t('deepLinkUnknownReason') }), { ...options, action: logAction }); break;
       case 'succeeded':
-        if (!restoredCompletedJob) showNotice(t('deepLinkImportSucceeded', common));
+        if (!restoredCompletedJob) toast.success(t('deepLinkImportSucceeded', common), { ...options, duration: 5000 });
         break;
     }
   }
@@ -105,7 +100,7 @@ function App() {
       if (generation === snapshotGeneration.current) setSnapshot(next);
       if (i18n.language !== next.settings.language) void i18n.changeLanguage(next.settings.language);
     }).catch((cause: unknown) => {
-      setError(errorMessage(cause, i18n.t('loadError')));
+      toast.error(errorMessage(cause, i18n.t('loadError')), { id: appErrorToastId, duration: Infinity });
       void client.reportError('app-startup', String(cause));
     }).finally(() => setIsLoading(false));
   }, [i18n]);
@@ -122,7 +117,7 @@ function App() {
       const key = receipt ? `${status.receivedCount}\u0000${receipt.boothItemId}\u0000${receipt.variationId ?? ''}\u0000${receipt.filename}\u0000${receipt.sourceIdentity}` : null;
       if (receipt && key && key !== lastReceiptKey.current) {
         lastReceiptKey.current = key;
-        showNotice(i18n.t('deepLinkReceived', { filename: receipt.filename }));
+        if (!status.lastImport) toast.info(i18n.t('deepLinkReceived', { filename: receipt.filename }), { id: 'booth-receipt' });
       }
       if (status.lastImport) handleImportStatus(status.lastImport, initial, status.activeCount, status.receivedCount);
     };
@@ -194,25 +189,25 @@ function App() {
   }
 
   async function perform<T>(action: () => Promise<T>, success?: (value: T) => string | undefined) {
-    setBusy(true); setError(''); showNotice(''); setImportIssues([]);
+    setBusy(true); toast.dismiss(appErrorToastId);
     try {
       const value = await action();
       const message = success?.(value);
-      if (message) showNotice(message);
+      if (message) toast.success(message);
       return value;
     } catch (cause) {
-      setError(errorMessage(cause, t('operationError')));
+      toast.error(errorMessage(cause, t('operationError')), { id: appErrorToastId, duration: Infinity });
       void client.reportError('ui.operation', String(cause));
       return undefined;
     } finally { setBusy(false); }
   }
 
   async function openManual() {
-    setBusy(true); setError(''); showNotice(''); setImportIssues([]);
+    setBusy(true); toast.dismiss(appErrorToastId);
     try {
       await client.openManual();
     } catch (cause) {
-      setError(errorMessage(cause, t('manualOpenError')));
+      toast.error(errorMessage(cause, t('manualOpenError')), { id: appErrorToastId, duration: Infinity });
       void client.reportError('open-manual', String(cause));
     } finally {
       setBusy(false);
@@ -221,13 +216,12 @@ function App() {
 
   async function registerDeepLink() {
     setBusy(true);
-    setError('');
-    showNotice('');
+    toast.dismiss(appErrorToastId);
     setDeepLinkError('');
     try {
       const status = await client.registerDeepLink();
       setDeepLinkStatus(status);
-      showNotice(t('deepLinkRegisteredNotice'));
+      toast.success(t('deepLinkRegisteredNotice'));
     } catch (cause) {
       const code = cause instanceof Error ? cause.message : typeof cause === 'string' ? cause : '';
       setDeepLinkError(code === 'BUNDLE_REQUIRED' ? i18n.t('bundleRequired') : t('deepLinkError'));
@@ -245,7 +239,7 @@ function App() {
       const linked = next.projects.find((project) => !previousIds.has(project.id));
       if (linked) {
         setSelectedProjectId(linked.id);
-        showNotice(t('projectLinked'));
+        toast.success(t('projectLinked'));
       }
     }
   }
@@ -259,8 +253,12 @@ function App() {
         ...result.failed.map((failure) => ({ filename: failure.filename, kind: 'failed' as const, message: t('importFailed'), detail: failure.error })),
         ...result.imported.flatMap((entry) => entry.warnings.map((warning) => ({ filename: latestVersion(entry.item.versions)?.originalFilename ?? entry.item.title, kind: 'warning' as const, message: localizedImportWarning(warning, t) }))),
       ];
-      setImportIssues(issues);
-      showNotice(result.imported.length || result.failed.length ? t('importSummary', { imported: result.imported.length, failed: result.failed.length, warnings: issues.filter((issue) => issue.kind === 'warning').length }) : t('noFilesAdded'));
+      const message = result.imported.length || result.failed.length ? t('importSummary', { imported: result.imported.length, failed: result.failed.length, warnings: issues.filter((issue) => issue.kind === 'warning').length }) : t('noFilesAdded');
+      const notify = result.failed.length ? toast.error : issues.length ? toast.warning : result.imported.length ? toast.success : toast.info;
+      notify(message, {
+        duration: issues.length ? Infinity : 5000,
+        description: issues.length ? <ul className="import-issues">{issues.map((issue, index) => <li key={`${issue.filename}-${index}`}><strong>{issue.filename}</strong>: {issue.message}{'detail' in issue && <details><summary>{t('errorDetails')}</summary><code>{issue.detail}</code></details>}</li>)}</ul> : undefined,
+      });
       const first = result.imported[0]?.item;
       if (first) {
         const latest = latestVersion(first.versions);
@@ -297,7 +295,7 @@ function App() {
       setSnapshot(next);
       if (i18n.language !== next.settings.language) await i18n.changeLanguage(next.settings.language);
       setSettingsOpen(false);
-      showNotice(t('settingsSaved'));
+      toast.success(i18n.t('settingsSaved'));
     }
   }
 
@@ -325,15 +323,14 @@ function App() {
         </aside>
         <main className="page-main">
           <div className="page-scroll">
-            {error && <div className="alert error" role="alert"><span>{error}</span><button className="text-button" onClick={() => setError('')}>{t('dismiss')}</button></div>}
-            {notice && <div className="alert" role={noticeHasLogAction || importIssues.some((issue) => issue.kind === 'failed') ? 'alert' : 'status'}><div className="alert-content"><span>{notice}</span>{importIssues.length > 0 && <ul className="import-issues">{importIssues.map((issue, index) => <li key={`${issue.filename}-${index}`}><strong>{issue.filename}</strong>: {issue.message}{issue.detail && <details><summary>{t('errorDetails')}</summary><code>{issue.detail}</code></details>}</li>)}</ul>}</div><div className="alert-actions">{noticeHasLogAction && <button className="text-button" onClick={() => setLogsOpen(true)}>{t('deepLinkOpenLogs')}</button>}<button className="text-button" onClick={() => { showNotice(''); setImportIssues([]); }}>{t('dismiss')}</button></div></div>}
-            {isLoading ? <LoadingState label={t('loading')} /> : activePage === 'projects' ? <ProjectsPage projects={orderedProjects} allCount={snapshot?.projects.length ?? 0} selectedId={selectedProjectId} selectedProject={selectedProject} sort={projectSort} onSort={setProjectSort} query={query} onQuery={setQuery} onLink={linkProject} onSelect={(project) => { setSelectedProjectId(project.id); showNotice(t('projectSelected', { name: project.name })); }} busy={busy} t={t} /> : <LibraryPage items={filteredItems} selectedItem={selectedItem} selectedVersion={selectedVersion} query={query} onQuery={setQuery} onAdd={addArchives} onSelect={(item) => { setSelectedItemId(item.id); setSelectedVersionId(latestVersion(item.versions)?.id ?? null); setChosenUnityPackages([]); }} onVersion={(id) => { setSelectedVersionId(id); setChosenUnityPackages([]); }} onExtract={extractSelected} archivePreview={currentPreview} onRetryPreview={() => setArchivePreviewAttempt((value) => value + 1)} busy={busy} selectedUnityPackages={visibleSelection} onTogglePackage={togglePackage} onMovePackage={movePackage} project={selectedProject} t={t} />}
+            {isLoading ? <LoadingState label={t('loading')} /> : activePage === 'projects' ? <ProjectsPage projects={orderedProjects} allCount={snapshot?.projects.length ?? 0} selectedId={selectedProjectId} selectedProject={selectedProject} sort={projectSort} onSort={setProjectSort} query={query} onQuery={setQuery} onLink={linkProject} onSelect={(project) => { setSelectedProjectId(project.id); toast.info(t('projectSelected', { name: project.name })); }} busy={busy} t={t} /> : <LibraryPage items={filteredItems} selectedItem={selectedItem} selectedVersion={selectedVersion} query={query} onQuery={setQuery} onAdd={addArchives} onSelect={(item) => { setSelectedItemId(item.id); setSelectedVersionId(latestVersion(item.versions)?.id ?? null); setChosenUnityPackages([]); }} onVersion={(id) => { setSelectedVersionId(id); setChosenUnityPackages([]); }} onExtract={extractSelected} archivePreview={currentPreview} onRetryPreview={() => setArchivePreviewAttempt((value) => value + 1)} busy={busy} selectedUnityPackages={visibleSelection} onTogglePackage={togglePackage} onMovePackage={movePackage} project={selectedProject} t={t} />}
           </div>
           {activePage === 'projects' ? <ProjectGuide t={t} /> : <PackageDetails item={selectedItem} version={selectedVersion} selectedCount={visibleSelection.length} project={selectedProject} busy={busy} onAdd={addArchives} onSettings={openSettings} t={t} />}
         </main>
       </div>
       {logsOpen && <LogDialog getLogs={client.getLogs} onClose={() => setLogsOpen(false)} t={t} />}
       {settingsOpen && settingsDraft && <SettingsDialog draft={settingsDraft} setDraft={setSettingsDraft} versions={snapshot?.items.flatMap((item) => item.versions.map((version) => ({ itemTitle: item.title, version })) ) ?? []} tab={settingsTab} setTab={setSettingsTab} busy={busy} deepLinkStatus={deepLinkStatus} deepLinkError={deepLinkError} onRegisterDeepLink={registerDeepLink} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onChoosePath={chooseLibraryPath} t={t} />}
+      <AppToaster container={logsOpen ? '.log-dialog' : settingsOpen ? '.settings-dialog' : null} />
     </div>
   );
 

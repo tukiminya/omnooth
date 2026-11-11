@@ -125,7 +125,10 @@ test('browser preview has an empty library and explains native file selection', 
   await expect(logs.getByRole('status')).toContainText('ログはありません。');
   await logs.getByRole('button', { name: '閉じる' }).click();
   await page.getByRole('button', { name: '既存プロジェクトを紐づける', exact: true }).first().click();
-  await expect(page.getByRole('alert')).toContainText('デスクトップアプリ');
+  const error = page.locator('[data-sonner-toast][data-type="error"]');
+  await expect(error).toContainText('デスクトップアプリ');
+  await error.getByRole('button', { name: '閉じる', exact: true }).click();
+  await expect(error).toHaveCount(0);
   await expect(page.locator('.project-card')).toHaveCount(0);
 });
 
@@ -220,6 +223,10 @@ test('settings cancel preserves persisted values and saving changes the full loc
   await dialog.getByRole('button', { name: '保存する', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+  const saved = page.locator('[data-sonner-toast][data-type="success"]');
+  await expect(saved).toContainText('Settings saved');
+  await expect(saved.getByRole('button', { name: 'Dismiss', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: /Notifications/ })).toHaveAttribute('aria-live', 'polite');
   const requests = await page.evaluate(() => (window as any).__workflowFixture.commands.length);
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   expect(await page.evaluate(() => (window as any).__workflowFixture.commands.length)).toBe(requests);
@@ -259,9 +266,13 @@ test('registration can replace an existing receiver and survives changing settin
   const register = dialog.getByRole('button', { name: 'BOOTH リンクの受信先に設定', exact: true });
   await register.click();
   await expect(dialog.locator('.deep-link-status')).toContainText('omnooth が BOOTH リンクの受信先です。');
+  const registered = page.locator('[data-sonner-toast][data-type="success"]');
+  await expect(registered).toContainText('BOOTH リンクの受信先を omnooth に設定しました。');
   await dialog.getByRole('tab', { name: 'バージョン履歴', exact: true }).click();
   await dialog.getByRole('tab', { name: '一般', exact: true }).click();
   await expect(dialog.locator('.deep-link-status')).toContainText('omnooth が BOOTH リンクの受信先です。');
+  await registered.getByRole('button', { name: '閉じる', exact: true }).click();
+  await expect(registered).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).__workflowFixture.commands.filter((name: string) => name === 'register_deep_link').length)).toBe(1);
 });
 
@@ -326,13 +337,14 @@ test('logs show empty and localized error states with retry', async ({ page }) =
 test('startup and live deep-link receipts show filenames without claiming import', async ({ page }) => {
   await installTransportFixture(page, true);
   await page.goto('/');
-  await expect(page.getByRole('status')).toContainText('BOOTH からリンクを受信しました：Cold.zip');
+  await expect(page.locator('[data-sonner-toast][data-type="info"]')).toContainText('BOOTH からリンクを受信しました：Cold.zip');
   await expect.poll(() => page.evaluate(() => (window as any).__workflowFixture.listenerCount())).toBe(1);
   await page.evaluate(() => (window as any).__workflowFixture.emitDeepLink({
     scheme: 'booth-library-manager', registered: true, receivedCount: 2,
     lastReceipt: { boothItemId: '43', variationId: null, filename: 'Live.zip', sourceIdentity: 'live-source' }, lastError: null,
   }));
-  await expect(page.getByRole('status')).toContainText('BOOTH からリンクを受信しました：Live.zip');
+  await expect(page.locator('[data-sonner-toast][data-type="info"]')).toContainText('BOOTH からリンクを受信しました：Live.zip');
+  await expect(page.locator('[data-sonner-toast]')).toHaveCount(1);
   await expect(page.locator('body')).not.toContainText('ライブラリに取り込みました');
 });
 
@@ -349,45 +361,69 @@ test('deep-link import progress and failure are announced once and link to logs'
   }, { state, errorCode });
 
   await emit('queued');
-  await expect(page.getByRole('status')).toContainText('BOOTH からのリンクを待機中：Avatar.zip');
+  await expect(page.locator('[data-sonner-toast][data-type="loading"]')).toContainText('BOOTH からのリンクを待機中：Avatar.zip');
   await emit('downloading');
-  await expect(page.getByRole('status')).toContainText('BOOTH からダウンロード中：Avatar.zip');
+  await expect(page.locator('[data-sonner-toast][data-type="loading"]')).toContainText('BOOTH からダウンロード中：Avatar.zip');
+  await expect(page.locator('[data-sonner-toast]')).toHaveCount(1);
   await emit('awaitingUrl', 'DOWNLOAD_URL_EXPIRED');
-  await expect(page.getByRole('alert')).toContainText('BOOTH から新しいリンクを開いてください');
+  await expect(page.locator('[data-sonner-toast][data-type="warning"]')).toContainText('BOOTH から新しいリンクを開いてください');
   await emit('failed', 'DOWNLOAD_REJECTED');
-  await expect(page.getByRole('alert')).toContainText('受信に失敗しました：Avatar.zip（DOWNLOAD_REJECTED）');
+  await expect(page.locator('[data-sonner-toast][data-type="error"]')).toContainText('受信に失敗しました：Avatar.zip（DOWNLOAD_REJECTED）');
   const snapshotCallsBeforeRepeat = await page.evaluate(() => (window as any).__workflowFixture.commands.filter((name: string) => name === 'getSnapshot').length);
   await page.getByRole('button', { name: '閉じる', exact: true }).click();
   await emit('failed', 'DOWNLOAD_REJECTED');
-  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.locator('[data-sonner-toast]')).toHaveCount(0);
   await emit('queued');
-  await expect(page.getByRole('status')).toContainText('BOOTH からのリンクを待機中：Avatar.zip');
+  await expect(page.locator('[data-sonner-toast][data-type="loading"]')).toContainText('BOOTH からのリンクを待機中：Avatar.zip');
+  await expect(page.getByRole('button', { name: 'ログを開く', exact: true })).toHaveCount(0);
   await emit('downloading');
   await emit('failed', 'DOWNLOAD_REJECTED');
   await expect(page.getByRole('button', { name: 'ログを開く', exact: true })).toBeVisible();
-  await expect(page.getByRole('alert')).toHaveCount(1);
+  await expect(page.locator('[data-sonner-toast]')).toHaveCount(1);
   expect(await page.evaluate(() => (window as any).__workflowFixture.commands.filter((name: string) => name === 'getSnapshot').length)).toBe(snapshotCallsBeforeRepeat);
 
   await page.getByRole('button', { name: 'ログを開く', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'アプリログ' })).toBeVisible();
 });
 
+test('deep-link errors remain available beyond the success toast duration', async ({ page }) => {
+  await page.clock.install();
+  await installTransportFixture(page, true, { jobId: 27, filename: 'Cold.zip', state: 'failed', errorCode: 'DOWNLOAD_REJECTED', itemId: null });
+  await page.goto('/');
+  const error = page.locator('[data-sonner-toast][data-type="error"]');
+  await expect(error).toContainText('受信に失敗しました：Cold.zip');
+  await page.clock.fastForward(6000);
+  await expect(error).toBeVisible();
+  await expect(error.getByRole('button', { name: 'ログを開く', exact: true })).toBeVisible();
+});
+
 test('deep-link success refreshes and selects the imported item', async ({ page }) => {
+  await page.clock.install();
   await installTransportFixture(page);
   await page.goto('/');
   await expect.poll(() => page.evaluate(() => (window as any).__workflowFixture.listenerCount())).toBe(1);
   await page.evaluate(() => {
     const fixture = (window as any).__workflowFixture;
-    const emit = (state: string) => fixture.emitDeepLink({
+    fixture.emitDeepLink({
       ...fixture.deepLink, receivedCount: 1, lastReceipt: null, lastError: null, activeCount: 1,
-      lastImport: { jobId: 31, filename: 'Avatar.zip', state, errorCode: null, itemId: state === 'succeeded' ? 'package-a' : null },
+      lastImport: { jobId: 31, filename: 'Avatar.zip', state: 'downloading', errorCode: null, itemId: null },
     });
-    emit('queued'); emit('downloading'); emit('importing'); emit('succeeded');
+  });
+  await expect(page.locator('[data-sonner-toast][data-type="loading"]')).toBeVisible();
+  await page.evaluate(() => {
+    const fixture = (window as any).__workflowFixture;
+    fixture.emitDeepLink({
+      ...fixture.deepLink,
+      lastImport: { ...fixture.deepLink.lastImport, state: 'succeeded', itemId: 'package-a' },
+    });
   });
   await expect(page.getByRole('heading', { name: 'ライブラリ', exact: true })).toBeVisible();
   await expect(page.locator('.item-row.selected')).toContainText('Test distribution');
-  await expect(page.getByRole('status')).toContainText('ライブラリに追加しました：Avatar.zip');
+  await expect(page.locator('[data-sonner-toast][data-type="success"]')).toContainText('ライブラリに追加しました：Avatar.zip');
+  await expect(page.locator('[data-sonner-toast]')).toHaveCount(1);
   expect(await page.evaluate(() => (window as any).__workflowFixture.commands.filter((name: string) => name === 'getSnapshot').length)).toBeGreaterThan(1);
+  await page.clock.fastForward(6000);
+  await expect(page.locator('[data-sonner-toast]')).toHaveCount(0);
 });
 
 test('a failed success refresh can retry when the same succeeded state is repeated', async ({ page }) => {
@@ -404,12 +440,12 @@ test('a failed success refresh can retry when the same succeeded state is repeat
     });
   });
   await emitSuccess();
-  await expect(page.getByRole('alert')).toContainText('SNAPSHOT_TEMPORARY_FAILURE');
+  await expect(page.locator('[data-sonner-toast][data-type="error"]')).toContainText('SNAPSHOT_TEMPORARY_FAILURE');
   await emitSuccess();
   await expect(page.getByRole('heading', { name: 'ライブラリ', exact: true })).toBeVisible();
   await expect(page.locator('.item-row.selected')).toContainText('Test distribution');
-  await expect(page.getByRole('alert')).toHaveCount(0);
-  await expect(page.getByRole('status')).toContainText('ライブラリに追加しました：Retry.zip');
+  await expect(page.locator('[data-sonner-toast][data-type="error"]')).toHaveCount(0);
+  await expect(page.locator('[data-sonner-toast][data-type="success"]')).toContainText('ライブラリに追加しました：Retry.zip');
 });
 
 test('startup success refreshes the library data without taking over the current page', async ({ page }) => {
@@ -427,7 +463,8 @@ test('cold start for a newly received link already succeeded opens the imported 
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'ライブラリ', exact: true })).toBeVisible();
   await expect(page.locator('.item-row.selected')).toContainText('Test distribution');
-  await expect(page.getByRole('status')).toContainText('ライブラリに追加しました：Cold.zip');
+  await expect(page.locator('[data-sonner-toast][data-type="success"]')).toContainText('ライブラリに追加しました：Cold.zip');
+  await expect(page.locator('[data-sonner-toast]')).toHaveCount(1);
 });
 
 test('window errors and unhandled rejections are reported without recursive reporting', async ({ page }) => {
@@ -448,9 +485,18 @@ test('batch import retains successes and displays per-file failures and warnings
   await installTransportFixture(page);
   await page.goto('/');
   await page.getByRole('button', { name: 'ファイルを追加', exact: true }).first().click();
-  await expect(page.getByRole('alert')).toContainText('取り込み 1 件・失敗 1 件・注意 1 件');
-  await expect(page.getByRole('alert')).toContainText('Invalid.zip');
-  await expect(page.getByRole('alert')).toContainText('原本を保存しました');
+  const result = page.locator('[data-sonner-toast][data-type="error"]');
+  await expect(result).toContainText('取り込み 1 件・失敗 1 件・注意 1 件');
+  await expect(result).toContainText('Invalid.zip');
+  await expect(result).toContainText('原本を保存しました');
+  await result.getByText('エラーの詳細', { exact: true }).click();
+  await expect(result.locator('code')).toHaveText('ARCHIVE_FORMAT_MISMATCH');
+  await page.getByRole('button', { name: '設定', exact: true }).click();
+  await expect(page.getByRole('dialog').locator('[data-sonner-toast]')).toContainText('Invalid.zip');
+  await page.keyboard.press('Escape');
+  await expect(result).toContainText('Invalid.zip');
+  await result.getByRole('button', { name: '閉じる', exact: true }).click();
+  await expect(result).toHaveCount(0);
 });
 
 for (const width of [1280, 1440, 1920]) {

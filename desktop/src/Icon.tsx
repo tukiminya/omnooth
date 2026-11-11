@@ -2,6 +2,8 @@ import {
   ArrowDownWideNarrow,
   ArrowRight,
   ChevronDown,
+  CircleCheck,
+  CircleX,
   CloudDownload,
   Folder,
   FolderOpen,
@@ -40,6 +42,8 @@ export type IconName =
   | 'grip'
   | 'disk'
   | 'warning'
+  | 'success'
+  | 'error'
   | 'lock'
   | 'project'
   | 'link'
@@ -66,6 +70,8 @@ const iconComponents = {
   grip: GripVertical,
   disk: HardDrive,
   warning: TriangleAlert,
+  success: CircleCheck,
+  error: CircleX,
   lock: LockKeyhole,
   project: FolderOpen,
   link: Link,

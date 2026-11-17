@@ -40,6 +40,8 @@ export interface LibraryVersion {
 export interface LibraryItem {
   id: string;
   title: string;
+  boothItemId?: string | null;
+  details?: { description: string; shop: string; category: string; tags: string[]; ageRating: string; isStarred: boolean; releaseNotes: string | null };
   versions: LibraryVersion[];
 }
 

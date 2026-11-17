@@ -297,3 +297,10 @@ button.settings-category { cursor: pointer; }
 .install-paths { max-height: 220px; overflow-y: auto; padding-left: 20px; font-size: 12px; }
 .installed-package { display: flex; gap: 16px; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--soft-line); }
 .installed-package p { margin: 4px 0; font-size: 12px; }
+
+.metadata-dialog { width: min(650px, calc(100% - 40px)); max-height: 90vh; overflow: auto; padding: 28px; border: 1px solid var(--line); border-radius: 14px; }
+.metadata-dialog form { display: grid; gap: 16px; }
+.metadata-dialog label { display: grid; gap: 6px; }
+.metadata-dialog input:not([type=checkbox]), .metadata-dialog textarea, .metadata-dialog select { width: 100%; padding: 9px; border: 1px solid var(--line); border-radius: 6px; background: white; color: inherit; font: inherit; }
+.metadata-dialog footer { display: flex; gap: 12px; justify-content: flex-end; }
+.plain-text { white-space: pre-wrap; overflow-wrap: anywhere; }

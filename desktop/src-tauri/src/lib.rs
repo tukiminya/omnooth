@@ -117,6 +117,8 @@ async fn open_manual(app: tauri::AppHandle) -> Result<(), String> {
 fn command_name(command: &ApplicationCommand) -> &'static str {
     match command {
         ApplicationCommand::GetSnapshot => "getSnapshot",
+        ApplicationCommand::SearchItems { .. } => "searchItems",
+        ApplicationCommand::UpdateItem { .. } => "updateItem",
         ApplicationCommand::LinkProject { .. } => "linkProject",
         ApplicationCommand::ImportArchive(_) => "importArchive",
         ApplicationCommand::InspectArchive { .. } => "inspectArchive",

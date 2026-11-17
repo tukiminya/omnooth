@@ -7,6 +7,7 @@ import { Icon } from './Icon';
 import { LogDialog } from './LogDialog';
 import { InstallationDialog } from './InstallationDialog';
 import { AppToaster } from './AppToaster';
+import { MetadataDialog } from './MetadataDialog';
 import { ArchiveContentsList } from './ArchiveContentsList';
 import { formatBytes } from './formatBytes';
 import type { AppSettings, AppSnapshot, ArchiveContents, DeepLinkStatus, LibraryItem, LibraryVersion, Project, InstallSelection } from './contracts';
@@ -36,6 +37,9 @@ function App() {
   const [deepLinkStatus, setDeepLinkStatus] = useState<DeepLinkStatus | null>(null);
   const [deepLinkError, setDeepLinkError] = useState('');
   const [query, setQuery] = useState('');
+  const [metadataEditing, setMetadataEditing] = useState<LibraryItem | null>(null);
+  const [searchResults, setSearchResults] = useState<LibraryItem[] | null>(null);
+  const [searchError, setSearchError] = useState(false);
   const [busy, setBusy] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const lastReceiptKey = useRef<string | null>(null);
@@ -176,7 +180,16 @@ function App() {
       return byDate || collator.compare(left.name, right.name);
     });
   }, [filteredProjects, projectSort, snapshot?.settings.language]);
-  const filteredItems = useMemo(() => (snapshot?.items ?? []).filter((item) => `${item.title} ${item.versions.map((v) => v.originalFilename).join(' ')}`.toLowerCase().includes(query.toLowerCase())), [snapshot, query]);
+  useEffect(() => {
+    let disposed = false;
+    setSearchError(false);
+    if (!query.trim()) { setSearchResults(null); return; }
+    const timer = setTimeout(() => {
+      void client.searchItems(query).then(items => { if (!disposed) setSearchResults(items); }).catch(() => { if (!disposed) { setSearchResults([]); setSearchError(true); } });
+    }, 150);
+    return () => { disposed = true; clearTimeout(timer); };
+  }, [query, snapshot]);
+  const filteredItems = searchResults ?? snapshot?.items ?? [];
   const visibleSelection = chosenUnityPackages.filter((id) => selectedVersion?.files.some((file) => file.id === id && file.kind === 'unitypackage' && !file.encrypted));
 
   function applySnapshot(next: AppSnapshot) {
@@ -325,15 +338,17 @@ function App() {
         </aside>
         <main className="page-main">
           <div className="page-scroll">
+            {activePage === 'library' && searchError && <p role="alert">{t('invalidSearch')}</p>}
             {isLoading ? <LoadingState label={t('loading')} /> : activePage === 'projects' ? <ProjectsPage projects={orderedProjects} allCount={snapshot?.projects.length ?? 0} selectedId={selectedProjectId} selectedProject={selectedProject} sort={projectSort} onSort={setProjectSort} query={query} onQuery={setQuery} onLink={linkProject} onSelect={(project) => { setSelectedProjectId(project.id); toast.info(t('projectSelected', { name: project.name })); }} busy={busy} t={t} /> : <LibraryPage items={filteredItems} selectedItem={selectedItem} selectedVersion={selectedVersion} query={query} onQuery={setQuery} onAdd={addArchives} onSelect={(item) => { setSelectedItemId(item.id); setSelectedVersionId(latestVersion(item.versions)?.id ?? null); setChosenUnityPackages([]); }} onVersion={(id) => { setSelectedVersionId(id); setChosenUnityPackages([]); }} onExtract={extractSelected} archivePreview={currentPreview} onRetryPreview={() => setArchivePreviewAttempt((value) => value + 1)} busy={busy} selectedUnityPackages={visibleSelection} onTogglePackage={togglePackage} onMovePackage={movePackage} project={selectedProject} t={t} />}
           </div>
-          {activePage === 'projects' ? <ProjectGuide t={t} project={selectedProject} onManage={() => { if (selectedProject) setInstallation({ project: selectedProject, selections: [] }); }} /> : <PackageDetails item={selectedItem} version={selectedVersion} selectedCount={visibleSelection.length} project={selectedProject} busy={busy} onAdd={addArchives} onSettings={openSettings} onApply={() => { if (selectedProject && selectedVersion) setInstallation({ project: selectedProject, selections: [{ versionId: selectedVersion.id, fileIds: visibleSelection }] }); }} t={t} />}
+          {activePage === 'projects' ? <ProjectGuide t={t} project={selectedProject} onManage={() => { if (selectedProject) setInstallation({ project: selectedProject, selections: [] }); }} /> : <PackageDetails onEdit={() => { if (selectedItem) setMetadataEditing(selectedItem); }} item={selectedItem} version={selectedVersion} selectedCount={visibleSelection.length} project={selectedProject} busy={busy} onAdd={addArchives} onSettings={openSettings} onApply={() => { if (selectedProject && selectedVersion) setInstallation({ project: selectedProject, selections: [{ versionId: selectedVersion.id, fileIds: visibleSelection }] }); }} t={t} />}
         </main>
       </div>
+      {metadataEditing && <MetadataDialog item={metadataEditing} busy={busy} onClose={() => setMetadataEditing(null)} onSave={async (title, details) => { const next = await perform(() => client.updateItem(metadataEditing.id, title, details)); if (next) { applySnapshot(next); setMetadataEditing(null); } }} t={t} />}
       {installation && <InstallationDialog project={installation.project} initialSelections={installation.selections} onClose={() => setInstallation(null)} t={t} />}
       {logsOpen && <LogDialog getLogs={client.getLogs} onClose={() => setLogsOpen(false)} t={t} />}
       {settingsOpen && settingsDraft && <SettingsDialog draft={settingsDraft} setDraft={setSettingsDraft} versions={snapshot?.items.flatMap((item) => item.versions.map((version) => ({ itemTitle: item.title, version })) ) ?? []} tab={settingsTab} setTab={setSettingsTab} busy={busy} deepLinkStatus={deepLinkStatus} deepLinkError={deepLinkError} onRegisterDeepLink={registerDeepLink} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onChoosePath={chooseLibraryPath} t={t} />}
-      <AppToaster container={installation ? '.installation-dialog' : logsOpen ? '.log-dialog' : settingsOpen ? '.settings-dialog' : null} />
+      <AppToaster container={metadataEditing ? '.metadata-dialog' : installation ? '.installation-dialog' : logsOpen ? '.log-dialog' : settingsOpen ? '.settings-dialog' : null} />
     </div>
   );
 
@@ -396,11 +411,13 @@ function LibraryPage({ items, selectedItem, selectedVersion, query, onQuery, onA
   </section>;
 }
 
-function PackageDetails({ item, version, selectedCount, project, busy, onAdd, onSettings, onApply, t }: { item: LibraryItem | null; version: LibraryVersion | null; selectedCount: number; project: Project | null; busy: boolean; onAdd: () => void; onSettings: () => void; onApply: () => void; t: (key: string, options?: Record<string, unknown>) => string }) {
+function PackageDetails({ onEdit, item, version, selectedCount, project, busy, onAdd, onSettings, onApply, t }: { onEdit: () => void; item: LibraryItem | null; version: LibraryVersion | null; selectedCount: number; project: Project | null; busy: boolean; onAdd: () => void; onSettings: () => void; onApply: () => void; t: (key: string, options?: Record<string, unknown>) => string }) {
   return <aside className="right-rail">
     <h2>{t('packageDetails')}</h2>
     {item && version ? <>
       <div className="rail-identity"><Icon name="disk" size={18} /><strong>{item.title}</strong></div><p className="rail-description">{t('originalFilename')}: <span className="mono">{version.originalFilename}</span></p>
+      <button className="button secondary full" onClick={onEdit} disabled={busy}>{t('editMetadata')}</button>
+      {item.details && <div className="rail-description"><p>{item.details.shop} {item.details.category} {item.details.isStarred ? '★' : ''}</p><p>{item.details.tags.join(' · ')}</p>{item.details.description && <details><summary>{t('description')}</summary><p className="plain-text">{item.details.description}</p></details>}{item.details.releaseNotes && <details><summary>{t('releaseNotes')}</summary><p>{t('extractedReleaseNotes')}</p><p className="plain-text">{item.details.releaseNotes}</p>{item.boothItemId && /^\d+$/.test(item.boothItemId) && <a href={`https://booth.pm/ja/items/${item.boothItemId}`} target="_blank" rel="noreferrer">{t('sourceProduct')}</a>}</details>}</div>}
       <hr /><div className="rail-label-row"><strong>{t('includedFiles')}</strong><span>{version.files.length}</span></div>
       {version.files.slice(0, 6).map((file) => <div className="rail-file" key={file.id}><span className="file-type">{file.relativePath.split('.').at(-1)?.toUpperCase() || 'FILE'}</span><div><span className="file-name mono">{file.relativePath}</span><small>{formatBytes(file.sizeBytes)} · {file.contentHash ? `SHA-256 ${file.contentHash.slice(0, 8)}` : t('hashOnImport')}</small></div></div>)}
       {version.files.length > 6 && <p className="subtle">{t('moreFiles', { count: version.files.length - 6 })}</p>}

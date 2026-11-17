@@ -35,6 +35,14 @@ async function getSnapshot(): Promise<AppSnapshot> {
 export const client = {
   isDesktop: desktop,
   getSnapshot,
+  async searchItems(query: string): Promise<AppSnapshot['items']> {
+    if (!desktop) return [];
+    return dispatch('searchItems', { query });
+  },
+  async updateItem(itemId: string, title: string, details: NonNullable<AppSnapshot['items'][number]['details']>): Promise<AppSnapshot> {
+    await dispatch('updateItem', { itemId, title, details });
+    return getSnapshot();
+  },
   async getDeepLinkStatus(): Promise<DeepLinkStatus> {
     if (!desktop) return { scheme: 'booth-library-manager', registered: false, receivedCount: 0, lastReceipt: null, lastError: null };
     return invoke('get_deep_link_status');

@@ -23,13 +23,15 @@ pub use deep_link::{parse_item_import_deep_link, ItemImportReceipt, ParsedItemIm
 mod archive_contents;
 mod booth_download;
 mod installation;
+mod library;
+pub use library::ItemDetails;
 mod unitypackage;
 pub use archive_contents::{
     ArchiveContents, ArchiveEntry, PreparedUnityImport, PreparedUnityPackage,
 };
 pub use installation::*;
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 const MAX_ARCHIVE_ENTRIES: usize = 100_000;
 const MAX_EXPANDED_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const MAX_BOOTH_DOWNLOAD_BYTES: u64 = 4 * 1024 * 1024 * 1024;
@@ -86,6 +88,12 @@ impl CoreError {
     }
 }
 
+impl From<serde_json::Error> for CoreError {
+    fn from(_: serde_json::Error) -> Self {
+        Self::Invalid("SERIALIZATION_ERROR")
+    }
+}
+
 pub type CoreResult<T> = Result<T, CoreError>;
 
 pub fn resolve_app_locale(saved: Option<&str>, os_locales: &[String]) -> &'static str {
@@ -139,6 +147,8 @@ pub struct AppSettings {
 pub struct LibraryItem {
     pub id: String,
     pub title: String,
+    pub booth_item_id: Option<String>,
+    pub details: ItemDetails,
     pub versions: Vec<LibraryVersion>,
 }
 
@@ -192,17 +202,42 @@ pub struct ImportArchiveInput {
 )]
 pub enum ApplicationCommand {
     GetSnapshot,
-    LinkProject { directory_path: PathBuf },
+    SearchItems {
+        query: String,
+    },
+    UpdateItem {
+        item_id: String,
+        title: String,
+        details: ItemDetails,
+    },
+    LinkProject {
+        directory_path: PathBuf,
+    },
     ImportArchive(ImportArchiveInput),
-    InspectArchive { version_id: String },
-    ExtractArchive { version_id: String },
-    UpdateSettings { settings: AppSettings },
+    InspectArchive {
+        version_id: String,
+    },
+    ExtractArchive {
+        version_id: String,
+    },
+    UpdateSettings {
+        settings: AppSettings,
+    },
     BuildInstallPlan(BuildInstallPlanInput),
     InstallItem(InstallItemInput),
-    GetInstallations { project_id: String },
-    PollInstallation { job_id: String },
-    RecoverInstallation { job_id: String, mode: RecoveryMode },
-    SetupUnityAdapter { project_id: String },
+    GetInstallations {
+        project_id: String,
+    },
+    PollInstallation {
+        job_id: String,
+    },
+    RecoverInstallation {
+        job_id: String,
+        mode: RecoveryMode,
+    },
+    SetupUnityAdapter {
+        project_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -287,6 +322,7 @@ impl Service {
         let metadata = title.map(|title| BoothItemMetadata {
             title: Some(title.to_owned()),
             source_updated_at: None,
+            details: ItemDetails::default(),
         });
         self.import_booth_download_with_metadata(
             request,
@@ -349,6 +385,14 @@ impl Service {
             &filename,
             metadata.and_then(|metadata| metadata.title.as_deref()),
         )?;
+        if let Some(metadata) = metadata {
+            let mut details = metadata.details.clone();
+            details.is_starred = self.load_item_by_id(&result.item.id)?.details.is_starred;
+            self.connect()?.execute(
+                "UPDATE packages SET metadata_json=?2 WHERE id=?1",
+                params![result.item.id, serde_json::to_string(&details)?],
+            )?;
+        }
         let _ = fs::remove_file(&downloaded.archive_path);
         Ok(ImportResult {
             item: self.load_item_by_id(&result.item.id)?,
@@ -488,6 +532,14 @@ impl Service {
     ) -> CoreResult<serde_json::Value> {
         match command {
             ApplicationCommand::GetSnapshot => serde_json::to_value(self.snapshot()?),
+            ApplicationCommand::SearchItems { query } => {
+                serde_json::to_value(self.search_items(&query)?)
+            }
+            ApplicationCommand::UpdateItem {
+                item_id,
+                title,
+                details,
+            } => serde_json::to_value(self.update_item(&item_id, &title, details)?),
             ApplicationCommand::LinkProject { directory_path } => {
                 serde_json::to_value(self.link_project(directory_path)?)
             }
@@ -947,6 +999,10 @@ fn migrate(conn: &mut Connection) -> CoreResult<()> {
     if version < 5 {
         installation::migrate(conn)?;
     }
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version < 6 {
+        library::migrate(conn)?;
+    }
     Ok(())
 }
 
@@ -1348,7 +1404,14 @@ fn load_item(conn: &Connection, id: String, title: String) -> CoreResult<Library
             state,
         )?);
     }
+    let (booth_item_id, metadata): (Option<String>, String) = conn.query_row(
+        "SELECT booth_item_id,metadata_json FROM packages WHERE id=?1",
+        [&id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
     Ok(LibraryItem {
+        booth_item_id,
+        details: serde_json::from_str(&metadata)?,
         id,
         title,
         versions: output,
@@ -1528,6 +1591,7 @@ mod tests {
         let metadata = BoothItemMetadata {
             title: Some("Costume Booth Title".into()),
             source_updated_at: Some("2026-08-18T00:30:00+09:00".into()),
+            details: ItemDetails::default(),
         };
         let imported = service
             .import_booth_download_with_metadata(&request, first, Some(&metadata), false, None)

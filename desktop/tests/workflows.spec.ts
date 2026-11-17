@@ -77,6 +77,7 @@ async function installTransportFixture(page: Page, coldReceipt = false, initialI
         async invoke(name: string, args: { eventId?: number; handler?: number; operation?: string; message?: string; options?: { multiple?: boolean }; command?: { type: string; input?: any } }) {
           if (name === 'plugin:event|listen') { const id = ++listenerId; eventHandlers.set(id, args.handler!); return id; }
           if (name === 'plugin:event|unlisten') { eventHandlers.delete(args.eventId!); return; }
+          if (name === 'dispatch' && args.command?.type === 'searchItems') return structuredClone(state.snapshot.items.filter(item => item.title.toLowerCase().includes(args.command!.input.query.toLowerCase())));
           if (name === 'get_deep_link_status') return structuredClone(state.deepLink);
           if (name === 'register_deep_link') { state.commands.push(name); state.deepLink.registered = true; return structuredClone(state.deepLink); }
           if (name === 'report_client_error') { state.reportedErrors.push({ operation: args.operation!, message: args.message! }); return; }
@@ -97,6 +98,7 @@ async function installTransportFixture(page: Page, coldReceipt = false, initialI
             }
             return structuredClone(state.snapshot);
           }
+          if (type === 'updateItem') { const item = state.snapshot.items.find(item => item.id === input.itemId); if (item) Object.assign(item, { title: input.title, details: input.details }); return item; }
           if (type === 'getInstallations') return structuredClone(state.installation);
           if (type === 'setupUnityAdapter') return;
           if (type === 'buildInstallPlan') {
@@ -621,4 +623,21 @@ test('Unity jobs resume inspection and protect user edits during recovery', asyn
   await dialog.getByRole('button', { name: '適用前のファイルへ復旧', exact: true }).click();
   await expect(dialog.getByRole('status')).toContainText('適用前のファイルへ復旧しました。');
   expect(await page.evaluate(() => (window as any).__workflowFixture.planInputs)).toEqual([]);
+});
+
+
+test('product information can be edited without selecting a Unity project', async ({ page }) => {
+  await installTransportFixture(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'ライブラリ', exact: true }).click();
+  await page.getByRole('button', { name: /Test distribution/ }).click();
+  await page.getByRole('button', { name: '商品情報を編集' }).click();
+  const dialog = page.getByRole('dialog', { name: '商品情報を編集' });
+  await dialog.getByLabel('商品名').fill('Edited product');
+  await dialog.getByLabel('ショップ', { exact: true }).fill('Test shop');
+  await dialog.getByLabel('お気に入り').check();
+  await dialog.getByRole('button', { name: '保存する' }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Edited product' })).toBeVisible();
+  await expect(page.locator('.right-rail')).toContainText('Test shop');
 });

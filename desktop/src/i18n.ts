@@ -3,6 +3,7 @@ import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 
 const ja = {
+  editMetadata: '商品情報を編集', itemTitle: '商品名', shop: 'ショップ', category: 'カテゴリ', tags: 'タグ（カンマ区切り）', ageRating: '年齢区分', unknownAge: '不明', allAges: '全年齢', starred: 'お気に入り', description: '商品説明', releaseNotes: '更新履歴', extractedReleaseNotes: '商品説明から抽出した更新履歴です。元の商品ページも確認してください。', sourceProduct: '元の商品ページ', invalidSearch: '検索条件を確認してください。空白は OR、&& は AND。shop: / category: / tag: / is:starred / age: に対応します。',
   ...unityJa,
   zipBrowseHint: 'ZIP を展開せずに中身を確認・選択できます。Unity へのインポート時に選択した unitypackage だけを一時展開し、正常にインポートできたら一時ファイルを削除します。',
   archiveContents: 'ZIP の収録内容', archiveEntryCount: '{{count}} 項目', searchArchiveContents: '収録パスを検索', archiveLoading: 'ZIP の中身を確認中…', archiveReadError: 'ZIP の中身を読み込めませんでした。詳しくはログを確認してください。', archiveRetry: '再試行', archiveEmpty: '空の ZIP です。', noArchiveContentsMatch: '一致する収録パスがありません。', archiveEncrypted: '暗号化（未対応）', archiveDirectory: 'フォルダー', showMoreArchiveContents: '続きを表示（残り {{count}} 項目）', hashOnImport: '取り出し時に SHA-256 を確認',
@@ -22,6 +23,7 @@ const ja = {
 };
 
 const en: Record<keyof typeof ja, string> = {
+  editMetadata: 'Edit product information', itemTitle: 'Title', shop: 'Shop', category: 'Category', tags: 'Tags (comma separated)', ageRating: 'Age rating', unknownAge: 'Unknown', allAges: 'All ages', starred: 'Favorite', description: 'Description', releaseNotes: 'Release notes', extractedReleaseNotes: 'Extracted from the product description. Also check the original product page.', sourceProduct: 'Original product page', invalidSearch: 'Check the query. Spaces mean OR; && means AND. Filters: shop: / category: / tag: / is:starred / age:.',
   ...unityEn,
   zipBrowseHint: 'Browse and select ZIP contents without extracting them. Only selected unitypackages are extracted temporarily for Unity import; temporary files are removed after a successful import.',
   archiveContents: 'ZIP contents', archiveEntryCount: '{{count}} entries', searchArchiveContents: 'Search paths in ZIP', archiveLoading: 'Reading ZIP contents…', archiveReadError: 'Could not read ZIP contents. Check the log for details.', archiveRetry: 'Retry', archiveEmpty: 'This ZIP is empty.', noArchiveContentsMatch: 'No matching paths.', archiveEncrypted: 'Encrypted (unsupported)', archiveDirectory: 'Folder', showMoreArchiveContents: 'Show more ({{count}} remaining)', hashOnImport: 'SHA-256 checked when extracted',
@@ -41,6 +43,7 @@ const en: Record<keyof typeof ja, string> = {
 };
 
 const ko: Record<keyof typeof ja, string> = {
+  editMetadata: '상품 정보 편집', itemTitle: '상품명', shop: '샵', category: '카테고리', tags: '태그 (쉼표로 구분)', ageRating: '연령 구분', unknownAge: '알 수 없음', allAges: '전체 이용가', starred: '즐겨찾기', description: '상품 설명', releaseNotes: '업데이트 내역', extractedReleaseNotes: '상품 설명에서 추출한 내역입니다. 원본 상품 페이지도 확인하세요.', sourceProduct: '원본 상품 페이지', invalidSearch: '검색 조건을 확인하세요. 공백은 OR, &&는 AND입니다. shop: / category: / tag: / is:starred / age:를 지원합니다.',
   ...unityKo,
   zipBrowseHint: 'ZIP을 풀지 않고 내용을 확인하고 선택할 수 있습니다. Unity로 가져올 때 선택한 unitypackage만 임시로 추출하고, 정상적으로 가져오면 임시 파일을 삭제합니다.',
   archiveContents: 'ZIP 내용', archiveEntryCount: '{{count}}개 항목', searchArchiveContents: 'ZIP 내부 경로 검색', archiveLoading: 'ZIP 내용 확인 중…', archiveReadError: 'ZIP 내용을 읽지 못했습니다. 로그를 확인하세요.', archiveRetry: '다시 시도', archiveEmpty: '빈 ZIP입니다.', noArchiveContentsMatch: '일치하는 경로가 없습니다.', archiveEncrypted: '암호화됨 (미지원)', archiveDirectory: '폴더', showMoreArchiveContents: '더 보기 ({{count}}개 남음)', hashOnImport: '추출할 때 SHA-256 확인',

@@ -124,8 +124,8 @@ export const client = {
     }
     return { snapshot: await getSnapshot(), imported, failed };
   },
-  async extractArchive(versionId: string): Promise<AppSnapshot> {
-    await dispatch('extractArchive', { versionId });
+  async extractArchive(versionId: string, password?: string): Promise<AppSnapshot> {
+    await dispatch(password === undefined ? 'extractArchive' : 'extractArchiveWithPassword', password === undefined ? { versionId } : { versionId, password });
     return getSnapshot();
   },
   async inspectArchive(versionId: string): Promise<ArchiveContents> {

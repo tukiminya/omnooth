@@ -7,6 +7,7 @@ import { Icon } from './Icon';
 import { LogDialog } from './LogDialog';
 import { InstallationDialog } from './InstallationDialog';
 import { AppToaster } from './AppToaster';
+import { ArchivePasswordDialog } from './ArchivePasswordDialog';
 import { PrivacyNoticeDialog } from './PrivacyNoticeDialog';
 import { CustomDialog } from './CustomDialog';
 import { MetadataDialog } from './MetadataDialog';
@@ -39,6 +40,7 @@ function App() {
   const [deepLinkStatus, setDeepLinkStatus] = useState<DeepLinkStatus | null>(null);
   const [deepLinkError, setDeepLinkError] = useState('');
   const [query, setQuery] = useState('');
+  const [passwordVersion, setPasswordVersion] = useState<string | null>(null);
   const [privacyAction, setPrivacyAction] = useState<'hide' | 'unlock' | null>(null);
   const [customEditing, setCustomEditing] = useState<{ item: LibraryItem | null } | null>(null);
   const [metadataEditing, setMetadataEditing] = useState<LibraryItem | null>(null);
@@ -199,7 +201,7 @@ function App() {
   function clearPrivateViews() {
     snapshotGeneration.current += 1;
     setSnapshot(current => current ? { ...current, items: [], privacy: current.privacy ? { ...current.privacy, unlocked: false, expiresAt: null } : undefined } : null);
-    setSearchResults(null); setSelectedItemId(null); setSelectedVersionId(null); setChosenUnityPackages([]); setInstallation(null); setCustomEditing(null); setMetadataEditing(null);
+    setSearchResults(null); setSelectedItemId(null); setSelectedVersionId(null); setChosenUnityPackages([]); setInstallation(null); setCustomEditing(null); setMetadataEditing(null); setPasswordVersion(null);
   }
   useEffect(() => {
     if (!snapshot?.privacy?.available) return;
@@ -312,7 +314,10 @@ function App() {
 
   async function extractSelected() {
     if (!selectedVersion) return;
-    const next = await perform(() => client.extractArchive(selectedVersion.id));
+    const next = await perform(async () => {
+      try { return await client.extractArchive(selectedVersion.id); }
+      catch (error) { if (String(error).includes('ARCHIVE_PASSWORD_REQUIRED')) { setPasswordVersion(selectedVersion.id); return null; } throw error; }
+    });
     if (next) applySnapshot(next);
   }
 
@@ -371,6 +376,7 @@ function App() {
           {activePage === 'projects' ? <ProjectGuide t={t} project={selectedProject} onManage={() => { if (selectedProject) setInstallation({ project: selectedProject, selections: [] }); }} /> : <PackageDetails canHide={snapshot?.privacy?.available ?? false} onHide={() => void changePrivacy('hide')} onCustom={() => setCustomEditing({ item: selectedItem })} onEdit={() => { if (selectedItem) setMetadataEditing(selectedItem); }} item={selectedItem} version={selectedVersion} selectedCount={visibleSelection.length} project={selectedProject} busy={busy} onAdd={addArchives} onSettings={openSettings} onApply={() => { if (selectedProject && selectedVersion) setInstallation({ project: selectedProject, selections: [{ versionId: selectedVersion.id, fileIds: visibleSelection }] }); }} t={t} />}
         </main>
       </div>
+      {passwordVersion && <ArchivePasswordDialog busy={busy} onClose={() => setPasswordVersion(null)} onExtract={async password => { const next = await perform(() => client.extractArchive(passwordVersion, password)); if (next) { applySnapshot(next); return true; } return false; }} t={t} />}
       {privacyAction && <PrivacyNoticeDialog busy={busy} onClose={() => setPrivacyAction(null)} onContinue={async () => {
         const action = privacyAction;
         const next = await perform(() => client.privacyAction('acknowledgePrivacyNotice'));
@@ -381,7 +387,7 @@ function App() {
       {installation && <InstallationDialog items={snapshot?.items ?? []} project={installation.project} initialSelections={installation.selections} onClose={() => setInstallation(null)} t={t} />}
       {logsOpen && <LogDialog getLogs={client.getLogs} onClose={() => setLogsOpen(false)} t={t} />}
       {settingsOpen && settingsDraft && <SettingsDialog draft={settingsDraft} setDraft={setSettingsDraft} versions={snapshot?.items.flatMap((item) => item.versions.map((version) => ({ itemTitle: item.title, version })) ) ?? []} tab={settingsTab} setTab={setSettingsTab} busy={busy} deepLinkStatus={deepLinkStatus} deepLinkError={deepLinkError} onRegisterDeepLink={registerDeepLink} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onChoosePath={chooseLibraryPath} t={t} />}
-      <AppToaster container={privacyAction ? '.metadata-dialog' : customEditing ? '.metadata-dialog' : metadataEditing ? '.metadata-dialog' : installation ? '.installation-dialog' : logsOpen ? '.log-dialog' : settingsOpen ? '.settings-dialog' : null} />
+      <AppToaster container={passwordVersion ? '.metadata-dialog' : privacyAction ? '.metadata-dialog' : customEditing ? '.metadata-dialog' : metadataEditing ? '.metadata-dialog' : installation ? '.installation-dialog' : logsOpen ? '.log-dialog' : settingsOpen ? '.settings-dialog' : null} />
     </div>
   );
 
@@ -507,6 +513,7 @@ function EmptyState({ title, body, action, onAction, disabled = false }: { title
 
 function LoadingState({ label }: { label: string }) { return <div className="loading-state" role="status"><span className="spinner" />{label}</div>; }
 function errorMessage(error: unknown, fallback: string) {
+  if (String(error).includes('ARCHIVE_PASSWORD_INVALID')) return i18n.t('archivePasswordInvalid');
   const code = String(error).match(/AUTH_CANCELLED|AUTH_UNAVAILABLE|AUTH_REQUIRED|NOTICE_REQUIRED/)?.[0];
   if (code) return i18n.t(code === 'AUTH_CANCELLED' ? 'authCancelled' : code === 'AUTH_UNAVAILABLE' ? 'authUnavailable' : 'authRequired');
   const value = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
@@ -521,7 +528,7 @@ function deepLinkErrorMessage(error: unknown) {
   return i18n.t('deepLinkError');
 }
 function localizedImportWarning(warning: string, t: (key: string) => string) {
-  const key = warning === 'NO_UNITYPACKAGE_FOUND' ? 'warningNoUnitypackage' : warning === 'EXTRACTION_UNSUPPORTED_STORED_ONLY' ? 'warningExtractionUnsupported' : '';
+  const key = warning === 'ARCHIVE_PASSWORD_REQUIRED_STORED_ONLY' ? 'archivePasswordStored' : warning === 'NO_UNITYPACKAGE_FOUND' ? 'warningNoUnitypackage' : warning === 'EXTRACTION_UNSUPPORTED_STORED_ONLY' ? 'warningExtractionUnsupported' : '';
   return key ? t(key) : warning;
 }
 function latestVersion(versions: LibraryVersion[]) {

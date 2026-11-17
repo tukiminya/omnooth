@@ -146,6 +146,8 @@ async function installTransportFixture(page: Page, coldReceipt = false, initialI
               { id: 'zip-e', relativePath: 'Locked.unitypackage', kind: 'unitypackage', sizeBytes: 100, encrypted: true },
             ] };
           }
+          if (type === 'extractArchive') throw new Error('ARCHIVE_PASSWORD_REQUIRED');
+          if (type === 'extractArchiveWithPassword') { if (input.password !== 'test-password') throw new Error('ARCHIVE_PASSWORD_INVALID'); state.snapshot.items[0].versions[1].state = 'extracted'; return; }
           if (type === 'importArchive') {
             if (input.originalFilename === 'Invalid.zip') throw 'ARCHIVE_FORMAT_MISMATCH';
             return { item: state.snapshot.items[0], reused: true, warnings: ['EXTRACTION_UNSUPPORTED_STORED_ONLY'] };
@@ -683,4 +685,21 @@ test('privacy notice cancellation changes nothing and hide requires explicit ack
   await page.getByRole('button', { name: '非表示を解除', exact: true }).click();
   await expect(page.getByText('認証がキャンセルされたか、成功しませんでした。', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /Test distribution/ })).not.toBeVisible();
+});
+
+
+test('archive password remains transient and an incorrect password can be retried', async ({ page }) => {
+  await installTransportFixture(page); await page.goto('/');
+  await page.getByRole('button', { name: 'ライブラリ', exact: true }).click();
+  await page.getByRole('button', { name: /Test distribution/ }).click();
+  await page.getByRole('combobox', { name: 'バージョン', exact: true }).selectOption('version-b');
+  await page.getByRole('button', { name: '原本を展開', exact: true }).click();
+  const dialog=page.getByRole('dialog',{name:'アーカイブのパスワード'});
+  await dialog.getByLabel('パスワード',{exact:true}).fill('wrong');
+  await dialog.getByRole('button',{name:'原本を展開',exact:true}).click();
+  await expect(dialog).toBeVisible(); await expect(dialog).toContainText('パスワードが一致しないか');
+  await dialog.getByLabel('パスワード',{exact:true}).fill('test-password');
+  await dialog.getByRole('button',{name:'原本を展開',exact:true}).click();
+  await expect(dialog).not.toBeVisible();
+  expect(await page.evaluate(()=>JSON.stringify(localStorage))).not.toContain('test-password');
 });

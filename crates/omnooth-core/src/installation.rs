@@ -460,7 +460,12 @@ impl Service {
         }
         originals.insert(PathBuf::from(&object), expected.clone());
         let mut result = Vec::new();
-        if filename.to_ascii_lowercase().ends_with(".zip") {
+        let extracted_state: bool = conn.query_row(
+            "SELECT state='extracted' FROM package_versions WHERE id=?1",
+            [&selection.version_id],
+            |r| r.get(0),
+        )?;
+        if filename.to_ascii_lowercase().ends_with(".zip") && !extracted_state {
             let mut archive = ZipArchive::new(File::open(&object)?)
                 .map_err(|e| CoreError::Archive(e.to_string()))?;
             let entries =
@@ -536,7 +541,7 @@ impl Service {
                 hash: expected,
                 source_file_id: selection.file_ids[0].clone(),
             });
-        } else if filename == "custom.manifest.json" {
+        } else if extracted_state {
             let extracted: String = conn.query_row(
                 "SELECT extracted_path FROM package_versions WHERE id=?1",
                 [&selection.version_id],
@@ -548,7 +553,14 @@ impl Service {
             }
             for id in &selection.file_ids {
                 let (relative,hash): (String,String) = conn.query_row("SELECT relative_path,content_hash FROM package_files WHERE version_id=?1 AND id=?2 AND kind='unitypackage'",params![selection.version_id,id],|r|Ok((r.get(0)?,r.get(1)?)))?;
-                let source = extracted.join(safe_member_path(&relative)?);
+                let relative = safe_member_path(&relative)?;
+                let mut source = extracted.clone();
+                for part in relative.components() {
+                    source.push(part);
+                    if fs::symlink_metadata(&source)?.file_type().is_symlink() {
+                        return Err(CoreError::Invalid("OBJECT_STORE_CORRUPT"));
+                    }
+                }
                 if fs::symlink_metadata(&source)?.file_type().is_symlink() {
                     return Err(CoreError::Invalid("OBJECT_STORE_CORRUPT"));
                 }

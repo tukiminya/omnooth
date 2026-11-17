@@ -21,6 +21,7 @@ pub use booth_download::{
 };
 pub use deep_link::{parse_item_import_deep_link, ItemImportReceipt, ParsedItemImport};
 mod archive_contents;
+mod archives;
 mod booth_download;
 mod custom;
 mod privacy;
@@ -203,7 +204,7 @@ pub struct ImportArchiveInput {
 }
 
 /// Shared command protocol for Tauri and the future local stdio adapter.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(
     tag = "type",
     content = "input",
@@ -212,6 +213,10 @@ pub struct ImportArchiveInput {
 )]
 pub enum ApplicationCommand {
     GetSnapshot,
+    ExtractArchiveWithPassword {
+        version_id: String,
+        password: String,
+    },
     AcknowledgePrivacyNotice,
     UnlockHiddenItems,
     LockHiddenItems,
@@ -575,6 +580,12 @@ impl Service {
             ApplicationCommand::SaveCustomPackage(input) => {
                 serde_json::to_value(self.save_custom_package(input)?)
             }
+            ApplicationCommand::ExtractArchiveWithPassword {
+                version_id,
+                password,
+            } => serde_json::to_value(
+                self.extract_archive_with_password(&version_id, Some(&password))?,
+            ),
             ApplicationCommand::GetSnapshot => serde_json::to_value(self.snapshot()?),
             ApplicationCommand::SearchItems { query } => {
                 serde_json::to_value(self.search_items(&query)?)
@@ -695,7 +706,7 @@ impl Service {
         let hash = hash_file(&input.archive_path)?;
         let lower = input.original_filename.to_ascii_lowercase();
         let direct_unitypackage = lower.ends_with(".unitypackage");
-        let supported_zip = format == ImportFormat::Zip;
+        let supported_archive = format != ImportFormat::Unitypackage;
         let mut warnings = Vec::new();
         let mut state = "stored".to_string();
         let mut files = Vec::new();
@@ -764,8 +775,14 @@ impl Service {
                 |r| r.get::<_, String>(0),
             )?;
             reconcile_object(&input.archive_path, Path::new(&registered_path), &hash)?;
-            if input.extract_archive && supported_zip && old_state != "extracted" {
-                self.extract_archive(&version_id)?;
+            if input.extract_archive && supported_archive && old_state != "extracted" {
+                match self.extract_archive(&version_id) {
+                    Ok(_) => {}
+                    Err(error) if error.code() == "ARCHIVE_PASSWORD_REQUIRED" => {
+                        warnings.push("ARCHIVE_PASSWORD_REQUIRED_STORED_ONLY".into())
+                    }
+                    Err(error) => return Err(error),
+                }
             }
             let title = conn.query_row(
                 "SELECT title FROM packages WHERE id=?1",
@@ -790,35 +807,6 @@ impl Service {
                 size_bytes: metadata.len(),
                 content_hash: hash.clone(),
             });
-        } else if input.extract_archive && supported_zip {
-            let extracted_root = object_path
-                .parent()
-                .and_then(Path::parent)
-                .ok_or(CoreError::Invalid("INVALID_LIBRARY_PATH"))?
-                .join("extracted");
-            let final_dir = extracted_root.join(&hash);
-            fs::create_dir_all(&extracted_root)?;
-            if !final_dir.exists() {
-                let staging = extracted_root.join(format!(".staging-{}", Uuid::new_v4()));
-                fs::create_dir_all(&staging)?;
-                if let Err(err) = extract_zip_safely(&object_path, &staging) {
-                    let _ = fs::remove_dir_all(&staging);
-                    return Err(err);
-                }
-                if let Err(err) = fs::rename(&staging, &final_dir) {
-                    let _ = fs::remove_dir_all(&staging);
-                    if !final_dir.exists() {
-                        return Err(err.into());
-                    }
-                }
-            }
-            files = collect_unitypackages(&final_dir)?;
-            state = "extracted".into();
-            if files.is_empty() {
-                warnings.push("NO_UNITYPACKAGE_FOUND".into());
-            }
-        } else if input.extract_archive {
-            warnings.push("EXTRACTION_UNSUPPORTED_STORED_ONLY".into());
         }
         let version_id = Uuid::new_v4().to_string();
         let imported_at = now();
@@ -851,6 +839,19 @@ impl Service {
             tx.execute("INSERT INTO package_files(id,version_id,relative_path,kind,size_bytes,content_hash) VALUES (?1,?2,?3,?4,?5,?6)",params![file.id,version_id,file.relative_path,file.kind,file.size_bytes as i64,file.content_hash])?;
         }
         tx.commit()?;
+        if input.extract_archive && supported_archive {
+            match self.extract_archive(&version_id) {
+                Ok(version) => {
+                    if version.files.is_empty() {
+                        warnings.push("NO_UNITYPACKAGE_FOUND".into());
+                    }
+                }
+                Err(error) if error.code() == "ARCHIVE_PASSWORD_REQUIRED" => {
+                    warnings.push("ARCHIVE_PASSWORD_REQUIRED_STORED_ONLY".into())
+                }
+                Err(error) => return Err(error),
+            }
+        }
         item = load_item(&conn, package_id, title)?;
         Ok(ImportResult {
             item,
@@ -865,13 +866,20 @@ impl Service {
 
     /// Explicitly extracts a previously stored ZIP, preserving its content-addressed original.
     pub fn extract_archive(&self, version_id: &str) -> CoreResult<LibraryVersion> {
+        self.extract_archive_with_password(version_id, None)
+    }
+    pub fn extract_archive_with_password(
+        &self,
+        version_id: &str,
+        password: Option<&str>,
+    ) -> CoreResult<LibraryVersion> {
         self.require_version_visible(version_id)?;
         let conn = self.connect()?;
         let (original_filename, hash, current_state, object_path, package_id) = conn.query_row(
             "SELECT original_filename,content_hash,state,object_path,package_id FROM package_versions WHERE id=?1", [version_id],
             |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?)),
         )?;
-        if !original_filename.to_ascii_lowercase().ends_with(".zip") {
+        if import_format(&original_filename)? == ImportFormat::Unitypackage {
             return Err(CoreError::Invalid("EXTRACTION_UNSUPPORTED"));
         }
         let original_path = Path::new(&object_path);
@@ -906,7 +914,12 @@ impl Service {
             fs::create_dir_all(&extracted_root)?;
             let staging = extracted_root.join(format!(".staging-{}", Uuid::new_v4()));
             fs::create_dir_all(&staging)?;
-            if let Err(err) = extract_zip_safely(Path::new(&object_path), &staging) {
+            if let Err(err) = archives::extract(
+                Path::new(&object_path),
+                &original_filename,
+                &staging,
+                password,
+            ) {
                 let _ = fs::remove_dir_all(&staging);
                 return Err(err);
             }
@@ -1292,15 +1305,30 @@ fn safe_member_path(name: &str) -> CoreResult<PathBuf> {
     Ok(out)
 }
 
+#[cfg(test)]
 fn extract_zip_safely(path: &Path, destination: &Path) -> CoreResult<()> {
-    extract_zip_safely_with_limits(path, destination, MAX_ARCHIVE_ENTRIES, MAX_EXPANDED_BYTES)
+    extract_zip_safely_with_password(path, destination, None)
 }
 
-fn extract_zip_safely_with_limits(
+fn extract_zip_safely_with_password(
+    path: &Path,
+    destination: &Path,
+    password: Option<&str>,
+) -> CoreResult<()> {
+    extract_zip_safely_with_limits_password(
+        path,
+        destination,
+        MAX_ARCHIVE_ENTRIES,
+        MAX_EXPANDED_BYTES,
+        password,
+    )
+}
+fn extract_zip_safely_with_limits_password(
     path: &Path,
     destination: &Path,
     max_entries: usize,
     max_bytes: u64,
+    password: Option<&str>,
 ) -> CoreResult<()> {
     let file = File::open(path)?;
     let mut archive =
@@ -1308,12 +1336,25 @@ fn extract_zip_safely_with_limits(
     if archive.len() > max_entries {
         return Err(CoreError::Archive("ARCHIVE_TOO_MANY_ENTRIES".into()));
     }
+    archive_contents::zip_entries(&mut archive, "extraction")?;
     let mut total = 0u64;
-    let mut seen: HashMap<PathBuf, bool> = HashMap::new();
     for index in 0..archive.len() {
-        let mut entry = archive
-            .by_index(index)
-            .map_err(|e| CoreError::Archive(e.to_string()))?;
+        let encrypted = archive
+            .by_index_raw(index)
+            .map_err(|_| CoreError::Invalid("ARCHIVE_INVALID"))?
+            .encrypted();
+        if encrypted && password.is_none() {
+            return Err(CoreError::Invalid("ARCHIVE_PASSWORD_REQUIRED"));
+        }
+        let mut entry = if let Some(password) = password {
+            archive
+                .by_index_decrypt(index, password.as_bytes())
+                .map_err(|_| CoreError::Invalid("ARCHIVE_PASSWORD_INVALID"))?
+        } else {
+            archive
+                .by_index(index)
+                .map_err(|_| CoreError::Invalid("ARCHIVE_INVALID"))?
+        };
         let relative = safe_member_path(entry.name())?;
         let is_dir = entry.is_dir();
         if let Some(mode) = entry.unix_mode() {
@@ -1325,20 +1366,6 @@ fn extract_zip_safely_with_limits(
                 _ => return Err(CoreError::Archive("ARCHIVE_SPECIAL_FILE".into())),
             }
         }
-        if seen.contains_key(&relative) {
-            return Err(CoreError::Archive("ARCHIVE_DUPLICATE_PATH".into()));
-        }
-        let mut prefix = PathBuf::new();
-        for component in relative.components() {
-            prefix.push(component.as_os_str());
-            if prefix != relative && seen.get(&prefix) == Some(&false) {
-                return Err(CoreError::Archive("ARCHIVE_PATH_COLLISION".into()));
-            }
-        }
-        if !is_dir && seen.keys().any(|path| path.starts_with(&relative)) {
-            return Err(CoreError::Archive("ARCHIVE_PATH_COLLISION".into()));
-        }
-        seen.insert(relative.clone(), is_dir);
         if total.saturating_add(entry.size()) > max_bytes {
             return Err(CoreError::Archive("ARCHIVE_TOO_LARGE".into()));
         }
@@ -1371,7 +1398,11 @@ fn extract_zip_safely_with_limits(
     Ok(())
 }
 
-fn copy_bounded<R: Read, W: Write>(reader: &mut R, writer: &mut W, budget: u64) -> CoreResult<u64> {
+fn copy_bounded<R: Read + ?Sized, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    budget: u64,
+) -> CoreResult<u64> {
     let mut copied = 0u64;
     let mut buffer = [0u8; 64 * 1024];
     loop {

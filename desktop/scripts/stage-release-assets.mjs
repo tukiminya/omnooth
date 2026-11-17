@@ -25,7 +25,6 @@ if (typeof config.version !== 'string' || !/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.tes
 
 const expected = new Map([
   ['macos-arm64-dmg', { asset: 'macos-arm64', extension: '.dmg' }],
-  ['macos-x64-dmg', { asset: 'macos-x64', extension: '.dmg' }],
   ['windows-x64-nsis', { asset: 'windows-x64', extension: '.exe' }],
   ['linux-x64-deb', { asset: 'linux-x64', extension: '.deb' }],
   ['linux-x64-appimage', { asset: 'linux-x64', extension: '.AppImage' }],

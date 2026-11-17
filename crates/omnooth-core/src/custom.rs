@@ -23,6 +23,13 @@ pub(crate) fn migrate(conn: &mut Connection) -> CoreResult<()> {
 
 impl Service {
     pub fn save_custom_package(&self, mut input: SaveCustomInput) -> CoreResult<LibraryItem> {
+        if let Some(id) = input.package_id.as_ref() {
+            self.require_item_visible(id)?;
+        }
+        self.require_item_visible(&input.display_parent_id)?;
+        for id in &input.required_version_ids {
+            self.require_version_visible(id)?;
+        }
         let name = booth_download::sanitize_booth_title(&input.name)
             .ok_or(CoreError::Invalid("INVALID_TITLE"))?;
         if input.description.len() > 32768

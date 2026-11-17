@@ -3,6 +3,7 @@ import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 
 const ja = {
+  hideItem: 'この商品を非表示にする', unhideItem: '非表示の指定を解除する', unlockHidden: '非表示を解除', lockHidden: '非表示に戻す', privacyNoticeTitle: '非表示機能について', privacyNoticeBody: 'この機能はアプリ内の一覧・検索から商品を隠します。保存ファイルは暗号化されず、Finder やエクスプローラーから引き続き閲覧できます。表示の解除には OS 認証が必要です。解除は5分間有効で、アプリを離れると再び非表示になります。', privacyContinue: '理解して続ける', authCancelled: '認証がキャンセルされたか、成功しませんでした。', authUnavailable: 'OS 認証を利用できません。', authRequired: '非表示の解除が必要です。',
   customPackage: '共通カスタム', createCustom: '共通カスタムを作成', editCustom: '共通カスタムを編集', customHint: '改変済みの unitypackage と必須の版を保存します。保存では Unity を変更しません。', displayParent: '表示先パッケージ', exactDependencies: '必須依存（版の完全一致）', dependencyVersion: '依存する版', noDependency: '依存しない', chooseCustomFiles: '改変済み unitypackage を選ぶ', keepCustomFiles: 'ファイルを選び直さない場合は、現在の内容を使います。', chooseDependencyFiles: '必須依存の unitypackage を選ぶ', dependencySelectionHint: '必要なファイルを適用順に選択してください。全件を自動選択しません。',
   editMetadata: '商品情報を編集', itemTitle: '商品名', shop: 'ショップ', category: 'カテゴリ', tags: 'タグ（カンマ区切り）', ageRating: '年齢区分', unknownAge: '不明', allAges: '全年齢', starred: 'お気に入り', description: '商品説明', releaseNotes: '更新履歴', extractedReleaseNotes: '商品説明から抽出した更新履歴です。元の商品ページも確認してください。', sourceProduct: '元の商品ページ', invalidSearch: '検索条件を確認してください。空白は OR、&& は AND。shop: / category: / tag: / is:starred / age: に対応します。',
   ...unityJa,
@@ -24,6 +25,7 @@ const ja = {
 };
 
 const en: Record<keyof typeof ja, string> = {
+  hideItem: 'Hide this product', unhideItem: 'Remove hidden status', unlockHidden: 'Unlock hidden items', lockHidden: 'Lock hidden items', privacyNoticeTitle: 'About hidden items', privacyNoticeBody: 'This hides products from lists and search in this app. Stored files are not encrypted and remain accessible in Finder or Explorer. OS authentication is required to reveal items. Access expires after five minutes or when you leave the app.', privacyContinue: 'Understand and continue', authCancelled: 'Authentication was cancelled or did not succeed.', authUnavailable: 'OS authentication is unavailable.', authRequired: 'Unlock hidden items first.',
   customPackage: 'Shared custom package', createCustom: 'Create custom package', editCustom: 'Edit custom package', customHint: 'Save modified unitypackages and exact dependencies. Saving does not change Unity.', displayParent: 'Display under package', exactDependencies: 'Required exact versions', dependencyVersion: 'Dependency version', noDependency: 'No dependency', chooseCustomFiles: 'Choose modified unitypackages', keepCustomFiles: 'Existing files are reused when no replacement is selected.', chooseDependencyFiles: 'Select dependency unitypackages', dependencySelectionHint: 'Select required files in import order. Files are never selected automatically.',
   editMetadata: 'Edit product information', itemTitle: 'Title', shop: 'Shop', category: 'Category', tags: 'Tags (comma separated)', ageRating: 'Age rating', unknownAge: 'Unknown', allAges: 'All ages', starred: 'Favorite', description: 'Description', releaseNotes: 'Release notes', extractedReleaseNotes: 'Extracted from the product description. Also check the original product page.', sourceProduct: 'Original product page', invalidSearch: 'Check the query. Spaces mean OR; && means AND. Filters: shop: / category: / tag: / is:starred / age:.',
   ...unityEn,
@@ -45,6 +47,7 @@ const en: Record<keyof typeof ja, string> = {
 };
 
 const ko: Record<keyof typeof ja, string> = {
+  hideItem: '이 상품 숨기기', unhideItem: '숨김 지정 해제', unlockHidden: '숨긴 상품 표시', lockHidden: '다시 숨기기', privacyNoticeTitle: '숨김 기능 안내', privacyNoticeBody: '앱의 목록과 검색에서 상품을 숨깁니다. 저장 파일은 암호화되지 않으며 Finder나 탐색기에서 계속 볼 수 있습니다. 표시하려면 OS 인증이 필요합니다. 5분이 지나거나 앱을 벗어나면 다시 숨겨집니다.', privacyContinue: '이해하고 계속', authCancelled: '인증이 취소되었거나 성공하지 못했습니다.', authUnavailable: 'OS 인증을 사용할 수 없습니다.', authRequired: '먼저 숨긴 상품을 표시하세요.',
   customPackage: '공통 커스텀', createCustom: '커스텀 만들기', editCustom: '커스텀 편집', customHint: '수정한 unitypackage와 정확한 필수 버전을 저장합니다. 저장 시 Unity는 변경되지 않습니다.', displayParent: '표시할 상위 패키지', exactDependencies: '정확한 필수 버전', dependencyVersion: '의존 버전', noDependency: '의존하지 않음', chooseCustomFiles: '수정한 unitypackage 선택', keepCustomFiles: '새 파일을 선택하지 않으면 기존 파일을 사용합니다.', chooseDependencyFiles: '필수 unitypackage 선택', dependencySelectionHint: '가져올 순서대로 파일을 선택하세요. 자동으로 선택하지 않습니다.',
   editMetadata: '상품 정보 편집', itemTitle: '상품명', shop: '샵', category: '카테고리', tags: '태그 (쉼표로 구분)', ageRating: '연령 구분', unknownAge: '알 수 없음', allAges: '전체 이용가', starred: '즐겨찾기', description: '상품 설명', releaseNotes: '업데이트 내역', extractedReleaseNotes: '상품 설명에서 추출한 내역입니다. 원본 상품 페이지도 확인하세요.', sourceProduct: '원본 상품 페이지', invalidSearch: '검색 조건을 확인하세요. 공백은 OR, &&는 AND입니다. shop: / category: / tag: / is:starred / age:를 지원합니다.',
   ...unityKo,

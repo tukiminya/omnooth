@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import type { AppSettings, AppSnapshot, ArchiveBatchResult, ArchiveContents, DeepLinkStatus, ImportResult, LogSnapshot, InstallSelection, InstallPlan, InstallationJob, InstallationState, RecoveryReport } from './contracts';
 
 const desktop = isTauri();
+let visibilityGeneration = 0;
 
 function normalizeLanguage(value: string): AppSettings['language'] {
   const base = value.toLowerCase().split(/[-_]/)[0];
@@ -29,12 +30,22 @@ async function getSnapshot(): Promise<AppSnapshot> {
       },
     };
   }
-  return dispatch('getSnapshot');
+  const generation = visibilityGeneration;
+  const result = await dispatch<AppSnapshot>('getSnapshot');
+  return generation === visibilityGeneration ? result : getSnapshot();
 }
 
 export const client = {
   isDesktop: desktop,
   getSnapshot,
+  async privacyAction(type: 'acknowledgePrivacyNotice' | 'unlockHiddenItems' | 'lockHiddenItems', item?: { itemId: string; hidden: boolean }): Promise<AppSnapshot> {
+    await dispatch(item ? 'setItemHidden' : type, item);
+    return getSnapshot();
+  },
+  async onVisibilityLocked(callback: () => void): Promise<() => void> {
+    if (!desktop) return () => {};
+    return listen('visibility-locked', () => { visibilityGeneration++; callback(); });
+  },
   async chooseCustomFiles(): Promise<string[]> {
     requireDesktop();
     return (await open({ multiple: true, filters: [{ name: 'Unity packages', extensions: ['unitypackage'] }] })) ?? [];
@@ -45,7 +56,9 @@ export const client = {
   },
   async searchItems(query: string): Promise<AppSnapshot['items']> {
     if (!desktop) return [];
-    return dispatch('searchItems', { query });
+    const generation = visibilityGeneration;
+    const result = await dispatch<AppSnapshot['items']>('searchItems', { query });
+    return generation === visibilityGeneration ? result : [];
   },
   async updateItem(itemId: string, title: string, details: NonNullable<AppSnapshot['items'][number]['details']>): Promise<AppSnapshot> {
     await dispatch('updateItem', { itemId, title, details });

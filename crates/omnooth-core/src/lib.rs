@@ -23,6 +23,8 @@ pub use deep_link::{parse_item_import_deep_link, ItemImportReceipt, ParsedItemIm
 mod archive_contents;
 mod booth_download;
 mod custom;
+mod privacy;
+pub use privacy::{AuthenticationGateway, PrivacyState, UnavailableAuthentication};
 mod installation;
 mod library;
 pub use custom::SaveCustomInput;
@@ -33,7 +35,7 @@ pub use archive_contents::{
 };
 pub use installation::*;
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 const MAX_ARCHIVE_ENTRIES: usize = 100_000;
 const MAX_EXPANDED_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const MAX_BOOTH_DOWNLOAD_BYTES: u64 = 4 * 1024 * 1024 * 1024;
@@ -152,6 +154,7 @@ pub struct LibraryItem {
     pub booth_item_id: Option<String>,
     pub details: ItemDetails,
     pub kind: String,
+    pub is_hidden: bool,
     pub display_parent_id: Option<String>,
     pub description: String,
     pub versions: Vec<LibraryVersion>,
@@ -186,6 +189,7 @@ pub struct AppSnapshot {
     pub projects: Vec<Project>,
     pub items: Vec<LibraryItem>,
     pub settings: AppSettings,
+    pub privacy: PrivacyState,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -208,6 +212,13 @@ pub struct ImportArchiveInput {
 )]
 pub enum ApplicationCommand {
     GetSnapshot,
+    AcknowledgePrivacyNotice,
+    UnlockHiddenItems,
+    LockHiddenItems,
+    SetItemHidden {
+        item_id: String,
+        hidden: bool,
+    },
     SaveCustomPackage(SaveCustomInput),
     SearchItems {
         query: String,
@@ -259,6 +270,7 @@ pub struct ImportResult {
 pub struct Service {
     db_path: PathBuf,
     app_data_dir: PathBuf,
+    visibility: std::sync::Arc<std::sync::Mutex<Option<(std::time::Instant, String)>>>,
 }
 
 impl Service {
@@ -279,6 +291,7 @@ impl Service {
         let service = Self {
             db_path,
             app_data_dir,
+            visibility: Default::default(),
         };
         let mut conn = service.connect()?;
         migrate(&mut conn)?;
@@ -481,6 +494,7 @@ impl Service {
     }
 
     fn load_item_by_id(&self, id: &str) -> CoreResult<LibraryItem> {
+        self.require_item_visible(id)?;
         let conn = self.connect()?;
         let title = conn.query_row("SELECT title FROM packages WHERE id=?1", [id], |row| {
             row.get(0)
@@ -511,9 +525,9 @@ impl Service {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         let mut stmt =
-            conn.prepare("SELECT id,title FROM packages ORDER BY title COLLATE NOCASE,id")?;
+            conn.prepare("SELECT id,title FROM packages WHERE is_hidden=0 OR ?1 ORDER BY title COLLATE NOCASE,id")?;
         let rows = stmt
-            .query_map([], |row| {
+            .query_map([self.privacy_state()?.unlocked], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -525,6 +539,7 @@ impl Service {
             projects,
             items,
             settings,
+            privacy: self.privacy_state()?,
         })
     }
 
@@ -537,7 +552,26 @@ impl Service {
         command: ApplicationCommand,
         unity: &dyn UnityGateway,
     ) -> CoreResult<serde_json::Value> {
+        self.dispatch_with_adapters(command, unity, &UnavailableAuthentication)
+    }
+
+    pub fn dispatch_with_adapters(
+        &self,
+        command: ApplicationCommand,
+        unity: &dyn UnityGateway,
+        auth: &dyn AuthenticationGateway,
+    ) -> CoreResult<serde_json::Value> {
         match command {
+            ApplicationCommand::AcknowledgePrivacyNotice => {
+                serde_json::to_value(self.acknowledge_privacy_notice()?)
+            }
+            ApplicationCommand::UnlockHiddenItems => {
+                serde_json::to_value(self.unlock_hidden_items(auth)?)
+            }
+            ApplicationCommand::LockHiddenItems => serde_json::to_value(self.lock_hidden_items()?),
+            ApplicationCommand::SetItemHidden { item_id, hidden } => {
+                serde_json::to_value(self.set_item_hidden(&item_id, hidden)?)
+            }
             ApplicationCommand::SaveCustomPackage(input) => {
                 serde_json::to_value(self.save_custom_package(input)?)
             }
@@ -698,6 +732,9 @@ impl Service {
             })
             .optional()?
             .is_none();
+        if !new_package {
+            self.require_item_visible(&package_id)?;
+        }
         let title = if new_package {
             filename_stem(&input.original_filename)
         } else {
@@ -828,6 +865,7 @@ impl Service {
 
     /// Explicitly extracts a previously stored ZIP, preserving its content-addressed original.
     pub fn extract_archive(&self, version_id: &str) -> CoreResult<LibraryVersion> {
+        self.require_version_visible(version_id)?;
         let conn = self.connect()?;
         let (original_filename, hash, current_state, object_path, package_id) = conn.query_row(
             "SELECT original_filename,content_hash,state,object_path,package_id FROM package_versions WHERE id=?1", [version_id],
@@ -1016,6 +1054,10 @@ fn migrate(conn: &mut Connection) -> CoreResult<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if version < 7 {
         custom::migrate(conn)?;
+    }
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version < 8 {
+        privacy::migrate(conn)?;
     }
     Ok(())
 }
@@ -1428,7 +1470,11 @@ fn load_item(conn: &Connection, id: String, title: String) -> CoreResult<Library
         [&id],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
+    let is_hidden = conn.query_row("SELECT is_hidden FROM packages WHERE id=?1", [&id], |r| {
+        r.get(0)
+    })?;
     Ok(LibraryItem {
+        is_hidden,
         kind,
         display_parent_id,
         description,

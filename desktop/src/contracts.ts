@@ -43,6 +43,7 @@ export interface LibraryItem {
   title: string;
   boothItemId?: string | null;
   kind?: string;
+  isHidden?: boolean;
   displayParentId?: string | null;
   description?: string;
   details?: { description: string; shop: string; category: string; tags: string[]; ageRating: string; isStarred: boolean; releaseNotes: string | null };
@@ -53,6 +54,7 @@ export interface AppSnapshot {
   projects: Project[];
   items: LibraryItem[];
   settings: AppSettings;
+  privacy?: { available: boolean; noticeAcknowledged: boolean; unlocked: boolean; expiresAt: string | null };
 }
 
 export interface ImportResult {

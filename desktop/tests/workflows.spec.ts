@@ -99,6 +99,9 @@ async function installTransportFixture(page: Page, coldReceipt = false, initialI
             }
             return structuredClone(state.snapshot);
           }
+          if (type === 'acknowledgePrivacyNotice') { (state.snapshot as any).privacy.noticeAcknowledged = true; return; }
+          if (type === 'unlockHiddenItems') throw new Error('AUTH_CANCELLED');
+          if (type === 'setItemHidden') { state.snapshot.items = state.snapshot.items.filter(item => item.id !== input.itemId); return; }
           if (type === 'saveCustomPackage') { state.snapshot.items.push({ ...state.snapshot.items[0], id: 'custom-a', title: input.name }); return; }
           if (type === 'updateItem') { const item = state.snapshot.items.find(item => item.id === input.itemId); if (item) Object.assign(item, { title: input.title, details: input.details }); return item; }
           if (type === 'getInstallations') return structuredClone(state.installation);
@@ -660,4 +663,24 @@ test('custom creation requires explicit files and an exact dependency without a 
   await expect(dialog).not.toBeVisible();
   await expect(page.getByRole('button', { name: /My custom/ })).toBeVisible();
   expect(await page.evaluate(() => (window as any).__workflowFixture.commands)).not.toContain('installItem');
+});
+
+
+test('privacy notice cancellation changes nothing and hide requires explicit acknowledgement', async ({ page }) => {
+  await installTransportFixture(page);
+  await page.addInitScript(() => Object.assign((window as any).__workflowFixture.snapshot, { privacy: { available: true, noticeAcknowledged: false, unlocked: false, expiresAt: null } }));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'ライブラリ', exact: true }).click();
+  await page.getByRole('button', { name: /Test distribution/ }).click();
+  await page.getByRole('button', { name: 'この商品を非表示にする' }).click();
+  const dialog = page.getByRole('dialog', { name: '非表示機能について' });
+  await expect(dialog).toContainText('保存ファイルは暗号化されず');
+  await dialog.getByRole('button', { name: 'キャンセル' }).click();
+  expect(await page.evaluate(() => (window as any).__workflowFixture.commands)).not.toContain('acknowledgePrivacyNotice');
+  await page.getByRole('button', { name: 'この商品を非表示にする' }).click();
+  await dialog.getByRole('button', { name: '理解して続ける' }).click();
+  await expect(page.getByRole('button', { name: /Test distribution/ })).not.toBeVisible();
+  await page.getByRole('button', { name: '非表示を解除', exact: true }).click();
+  await expect(page.getByText('認証がキャンセルされたか、成功しませんでした。', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Test distribution/ })).not.toBeVisible();
 });

@@ -1,4 +1,5 @@
 mod activity_log;
+mod authentication;
 mod booth_import;
 mod deep_link_registration;
 mod import_queue;
@@ -117,6 +118,10 @@ async fn open_manual(app: tauri::AppHandle) -> Result<(), String> {
 fn command_name(command: &ApplicationCommand) -> &'static str {
     match command {
         ApplicationCommand::SaveCustomPackage(_) => "saveCustomPackage",
+        ApplicationCommand::AcknowledgePrivacyNotice => "acknowledgePrivacyNotice",
+        ApplicationCommand::UnlockHiddenItems => "unlockHiddenItems",
+        ApplicationCommand::LockHiddenItems => "lockHiddenItems",
+        ApplicationCommand::SetItemHidden { .. } => "setItemHidden",
         ApplicationCommand::GetSnapshot => "getSnapshot",
         ApplicationCommand::SearchItems { .. } => "searchItems",
         ApplicationCommand::UpdateItem { .. } => "updateItem",
@@ -144,7 +149,11 @@ async fn dispatch(
     tauri::async_runtime::spawn_blocking(move || {
         let name = command_name(&command);
         record(&app, LogLevel::Info, name, "処理を開始しました", None);
-        match service.dispatch_with_unity(command, &omnooth_unity::EditorGateway) {
+        match service.dispatch_with_adapters(
+            command,
+            &omnooth_unity::EditorGateway,
+            &authentication::NativeAuthentication(app.clone()),
+        ) {
             Ok(value) => {
                 record(&app, LogLevel::Info, name, "処理が完了しました", None);
                 Ok(value)
@@ -179,6 +188,22 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Focused(false)) {
+                if let Some(backend) = window.app_handle().try_state::<Backend>() {
+                    if !backend
+                        .service
+                        .privacy_state()
+                        .is_ok_and(|state| state.unlocked)
+                    {
+                        return;
+                    }
+                    let _ = backend.service.lock_hidden_items();
+                }
+                use tauri::Emitter;
+                let _ = window.emit("visibility-locked", ());
+            }
+        })
         .setup(|app| {
             let app_data = app.path().app_data_dir()?;
             #[cfg(debug_assertions)]

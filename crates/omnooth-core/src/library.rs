@@ -28,6 +28,7 @@ impl Service {
         title: &str,
         mut details: ItemDetails,
     ) -> CoreResult<LibraryItem> {
+        self.require_item_visible(item_id)?;
         let title = booth_download::sanitize_booth_title(title)
             .ok_or(CoreError::Invalid("INVALID_TITLE"))?;
         if details.description.len() > 128 * 1024
@@ -61,10 +62,19 @@ impl Service {
     }
 
     pub fn search_items(&self, query: &str) -> CoreResult<Vec<LibraryItem>> {
-        let (predicate, values) = search_sql(query)?;
+        let (predicate, mut values) = search_sql(query)?;
+        values.insert(
+            0,
+            if self.privacy_state()?.unlocked {
+                "1"
+            } else {
+                "0"
+            }
+            .into(),
+        );
         let conn = self.connect()?;
         let mut stmt = conn.prepare(&format!(
-            "SELECT id,title FROM packages WHERE ({predicate}) ORDER BY title COLLATE NOCASE,id"
+            "SELECT id,title FROM packages WHERE (is_hidden=0 OR CAST(? AS INTEGER)=1) AND ({predicate}) ORDER BY title COLLATE NOCASE,id"
         ))?;
         let rows = stmt
             .query_map(rusqlite::params_from_iter(values), |r| {

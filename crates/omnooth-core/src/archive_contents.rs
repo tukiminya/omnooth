@@ -153,6 +153,7 @@ impl Service {
     /// Reads only the ZIP directory, leaving original, extraction state and DB untouched.
     /// Entry sizes are declarations; SHA-256/CRC verification happens when materialized.
     pub fn inspect_archive(&self, version_id: &str) -> CoreResult<ArchiveContents> {
+        self.require_version_visible(version_id)?;
         let (path, _) = self.zip_source(version_id)?;
         let mut archive =
             ZipArchive::new(File::open(path)?).map_err(|e| CoreError::Archive(e.to_string()))?;
@@ -174,6 +175,7 @@ impl Service {
         version_id: &str,
         selected_ids: &[String],
     ) -> CoreResult<PreparedUnityImport> {
+        self.require_version_visible(version_id)?;
         if selected_ids.is_empty()
             || selected_ids.iter().collect::<HashSet<_>>().len() != selected_ids.len()
         {

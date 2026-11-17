@@ -571,6 +571,12 @@ impl Service {
     }
 
     pub fn build_install_plan(&self, input: BuildInstallPlanInput) -> CoreResult<InstallPlan> {
+        for selection in &input.selections {
+            self.require_version_visible(&selection.version_id)?;
+        }
+        for id in &input.remove_package_ids {
+            self.require_item_visible(id)?;
+        }
         let conn = self.connect()?;
         let _lock = self.installation_lock(&input.project_id)?;
         no_busy(&conn, &input.project_id)?;
@@ -632,6 +638,9 @@ impl Service {
         }
         // Same selection for an unaffected package must not silently re-import it.
         affected = operations.iter().map(|o| o.package_id.clone()).collect();
+        for id in desired.keys() {
+            self.require_item_visible(id)?;
+        }
         let order = dependency_order(&conn, &desired)?;
         let id = Uuid::new_v4().to_string();
         let root = self.app_data_dir.join("install-staging").join(&id);
@@ -854,6 +863,9 @@ impl Service {
         let desired = desired_state(&conn, project_id)?;
         let mut packages = Vec::new();
         for (package_id, selection) in desired {
+            if self.require_item_visible(&package_id).is_err() {
+                continue;
+            }
             let (title,date,hash): (String,String,String) = conn.query_row("SELECT p.title,v.version_date,v.content_hash FROM packages p JOIN package_versions v ON v.package_id=p.id WHERE v.id=?1", [&selection.version_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
             packages.push(InstalledPackage {
                 package_id,
@@ -908,6 +920,9 @@ impl Service {
             .optional()?
             .ok_or(CoreError::Invalid("PLAN_STALE"))?;
         let stored: StoredPlan = decode(&payload)?;
+        for id in stored.affected.iter().chain(stored.desired.keys()) {
+            self.require_item_visible(id)?;
+        }
         let project = self.installation_project(&conn, &input.project_id)?;
         if project != stored.project_path
             || base_hash(&conn, &input.project_id, &project, &scan_project(&project)?)?
@@ -1157,6 +1172,9 @@ impl Service {
             return Err(CoreError::Invalid("RECOVERY_NOT_REQUIRED"));
         }
         let journal = load_journal(&conn, job_id)?;
+        for id in &journal.plan.affected {
+            self.require_item_visible(id)?;
+        }
         let project = &journal.plan.project_path;
         self.installation_project(&conn, &job.project_id)?;
         let mut conflicts = Vec::new();

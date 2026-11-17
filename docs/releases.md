@@ -10,12 +10,11 @@ Concurrency is keyed by both branch and commit, so a newer merge does not replac
 
 | Runner | Target | Installer |
 | --- | --- | --- |
-| macOS 15 Apple Silicon | `aarch64-apple-darwin` | DMG |
-| macOS 15 Intel | `x86_64-apple-darwin` | DMG |
-| Windows Server 2022 x64 | `x86_64-pc-windows-msvc` | NSIS `.exe` |
-| Ubuntu 22.04 x64 | `x86_64-unknown-linux-gnu` | `.deb` and AppImage |
+| macOS 26 Apple Silicon | `aarch64-apple-darwin` | DMG |
+| Windows Server 2025 x64 | `x86_64-pc-windows-msvc` | NSIS `.exe` |
+| Ubuntu 26.04 x64 | `x86_64-unknown-linux-gnu` | `.deb` and AppImage |
 
-Ubuntu 22.04 supplies the WebKitGTK 4.1 build dependencies and acts as the Linux compatibility baseline. The macOS Intel runner label is `macos-15-intel`; confirm GitHub's current runner labels when updating this workflow.
+Ubuntu 26.04 supplies the WebKitGTK 4.1 build dependencies and acts as the Linux compatibility baseline. The macOS Intel runner label is `macos-15-intel`; confirm GitHub's current runner labels when updating this workflow.
 
 ## Draft release flow
 

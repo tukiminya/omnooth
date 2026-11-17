@@ -190,12 +190,14 @@ pub fn run() {
                 "omnooth 0.1.0 を起動しています",
                 None,
             )?;
+            let os_locales: Vec<String> = sys_locale::get_locales().collect();
             let service_result = if isolated.is_some() {
-                Service::open(data_directory)
+                Service::open_with_locales(data_directory, &os_locales)
             } else {
-                Service::open_migrating_legacy(
+                Service::open_migrating_legacy_with_locales(
                     &app_data,
                     app_data.with_file_name("jp.tukiminya.omnooth"),
+                    &os_locales,
                 )
             };
             let service = match service_result {

@@ -88,6 +88,33 @@ impl CoreError {
 
 pub type CoreResult<T> = Result<T, CoreError>;
 
+pub fn resolve_app_locale(saved: Option<&str>, os_locales: &[String]) -> &'static str {
+    fn supported(value: &str) -> Option<&'static str> {
+        if !value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return None;
+        }
+        match value
+            .split(['-', '_'])
+            .next()?
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "ja" => Some("ja"),
+            "en" => Some("en"),
+            "ko" => Some("ko"),
+            _ => None,
+        }
+    }
+    saved
+        .filter(|value| matches!(*value, "ja" | "en" | "ko"))
+        .and_then(supported)
+        .or_else(|| os_locales.iter().find_map(|value| supported(value)))
+        .unwrap_or("ja")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
@@ -196,6 +223,14 @@ impl Service {
     /// Opens the product database at `<app_data_dir>/omnooth.sqlite` and initializes
     /// the default library at `<app_data_dir>/Library`.
     pub fn open(app_data_dir: impl AsRef<Path>) -> CoreResult<Self> {
+        Self::open_with_locales(app_data_dir, &[])
+    }
+
+    /// OS locale is used only when creating the settings row for the first time.
+    pub fn open_with_locales(
+        app_data_dir: impl AsRef<Path>,
+        os_locales: &[String],
+    ) -> CoreResult<Self> {
         let app_data_dir = app_data_dir.as_ref().to_path_buf();
         fs::create_dir_all(&app_data_dir)?;
         let db_path = app_data_dir.join("omnooth.sqlite");
@@ -209,8 +244,8 @@ impl Service {
         fs::create_dir_all(default_library.join("objects"))?;
         fs::create_dir_all(default_library.join("extracted"))?;
         conn.execute(
-            "INSERT OR IGNORE INTO app_settings(id, language, library_path, extract_archives, keep_old_versions, updated_at) VALUES (1, 'ja', ?1, 0, 1, ?2)",
-            params![default_library.to_string_lossy(), now()],
+            "INSERT OR IGNORE INTO app_settings(id, language, library_path, extract_archives, keep_old_versions, updated_at) VALUES (1, ?1, ?2, 0, 1, ?3)",
+            params![resolve_app_locale(None, os_locales), default_library.to_string_lossy(), now()],
         )?;
         Ok(service)
     }
@@ -223,6 +258,15 @@ impl Service {
     ) -> CoreResult<Self> {
         migrate_legacy_database(&new_app_data_dir, &old_app_data_dir)?;
         Self::open(new_app_data_dir)
+    }
+
+    pub fn open_migrating_legacy_with_locales(
+        new_app_data_dir: impl AsRef<Path>,
+        old_app_data_dir: impl AsRef<Path>,
+        os_locales: &[String],
+    ) -> CoreResult<Self> {
+        migrate_legacy_database(&new_app_data_dir, &old_app_data_dir)?;
+        Self::open_with_locales(new_app_data_dir, os_locales)
     }
 
     /// App-managed staging directory for downloads. No user-controlled path is used.
@@ -1346,6 +1390,25 @@ fn load_version(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn locale_resolution_and_first_launch_preserve_saved_language() {
+        assert_eq!(
+            resolve_app_locale(None, &["fr-FR".into(), "ko-KR".into()]),
+            "ko"
+        );
+        assert_eq!(resolve_app_locale(Some("ko"), &["ja-JP".into()]), "ko");
+        assert_eq!(resolve_app_locale(None, &["en_US".into()]), "en");
+        assert_eq!(
+            resolve_app_locale(None, &["en-!".into(), "de-DE".into()]),
+            "ja"
+        );
+        let directory = temp();
+        let service = Service::open_with_locales(&directory, &["ko-KR".into()]).unwrap();
+        assert_eq!(service.snapshot().unwrap().settings.language, "ko");
+        let reopened = Service::open_with_locales(&directory, &["en-US".into()]).unwrap();
+        assert_eq!(reopened.snapshot().unwrap().settings.language, "ko");
+    }
+
     fn temp() -> PathBuf {
         let path = std::env::temp_dir().join(format!("omnooth-core-{}", Uuid::new_v4()));
         fs::create_dir_all(&path).unwrap();

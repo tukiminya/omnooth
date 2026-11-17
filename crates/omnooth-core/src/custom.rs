@@ -23,6 +23,7 @@ pub(crate) fn migrate(conn: &mut Connection) -> CoreResult<()> {
 
 impl Service {
     pub fn save_custom_package(&self, mut input: SaveCustomInput) -> CoreResult<LibraryItem> {
+        let _library_lock = self.library_access(false)?;
         if let Some(id) = input.package_id.as_ref() {
             self.require_item_visible(id)?;
         }
@@ -190,6 +191,7 @@ impl Service {
         if existing.is_none() {
             let version = Uuid::new_v4().to_string();
             tx.execute("INSERT INTO package_versions(id,package_id,original_filename,content_hash,version_date,state,object_path,extracted_path,imported_at) VALUES(?1,?2,'custom.manifest.json',?3,?4,'extracted',?5,?6,?7)",params![version,package_id,hash,Utc::now().format("%Y-%m-%d").to_string(),object.to_string_lossy(),root.to_string_lossy(),now()])?;
+            crate::maintenance::record_extraction(&tx, &version, &root)?;
             for (filename, (_, hash, size)) in sources {
                 tx.execute("INSERT INTO package_files(id,version_id,relative_path,kind,size_bytes,content_hash) VALUES(?1,?2,?3,'unitypackage',?4,?5)",params![Uuid::new_v4().to_string(),version,filename,size as i64,hash])?;
             }

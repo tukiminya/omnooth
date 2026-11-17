@@ -147,3 +147,6 @@ export interface SaveCustomInput {
   unitypackagePaths: string[];
   requiredVersionIds: string[];
 }
+
+export interface CleanupPlan { planHash: string; versions: Array<[string, string]>; stagingCount: number; backupCount: number; bytes: number }
+export interface CleanupReport { removedVersions: number; removedDirectories: number; retainedPaths: string[] }

@@ -24,7 +24,9 @@ mod archive_contents;
 mod archives;
 mod booth_download;
 mod custom;
+mod maintenance;
 mod privacy;
+pub use maintenance::{CleanupPlan, CleanupReport};
 pub use privacy::{AuthenticationGateway, PrivacyState, UnavailableAuthentication};
 mod installation;
 mod library;
@@ -36,7 +38,7 @@ pub use archive_contents::{
 };
 pub use installation::*;
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 10;
 const MAX_ARCHIVE_ENTRIES: usize = 100_000;
 const MAX_EXPANDED_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const MAX_BOOTH_DOWNLOAD_BYTES: u64 = 4 * 1024 * 1024 * 1024;
@@ -213,6 +215,10 @@ pub struct ImportArchiveInput {
 )]
 pub enum ApplicationCommand {
     GetSnapshot,
+    BuildCleanupPlan,
+    ExecuteCleanup {
+        plan_hash: String,
+    },
     ExtractArchiveWithPassword {
         version_id: String,
         password: String,
@@ -300,6 +306,10 @@ impl Service {
         };
         let mut conn = service.connect()?;
         migrate(&mut conn)?;
+        {
+            let _maintenance_lock = service.library_access(true)?;
+            service.recover_cleanup(&conn)?;
+        }
         let default_library = service.app_data_dir.join("Library");
         fs::create_dir_all(default_library.join("objects"))?;
         fs::create_dir_all(default_library.join("extracted"))?;
@@ -586,6 +596,12 @@ impl Service {
             } => serde_json::to_value(
                 self.extract_archive_with_password(&version_id, Some(&password))?,
             ),
+            ApplicationCommand::BuildCleanupPlan => {
+                serde_json::to_value(self.build_cleanup_plan()?)
+            }
+            ApplicationCommand::ExecuteCleanup { plan_hash } => {
+                serde_json::to_value(self.execute_cleanup(&plan_hash)?)
+            }
             ApplicationCommand::GetSnapshot => serde_json::to_value(self.snapshot()?),
             ApplicationCommand::SearchItems { query } => {
                 serde_json::to_value(self.search_items(&query)?)
@@ -661,6 +677,7 @@ impl Service {
     }
 
     pub fn update_settings(&self, settings: AppSettings) -> CoreResult<AppSettings> {
+        let _library_lock = self.library_access(false)?;
         if !matches!(settings.language.as_str(), "ja" | "en" | "ko") {
             return Err(CoreError::Invalid("INVALID_LANGUAGE"));
         }
@@ -694,6 +711,7 @@ impl Service {
         identity_override: Option<&str>,
         source_updated_at: Option<&str>,
     ) -> CoreResult<ImportResult> {
+        let _library_lock = self.library_access(false)?;
         validate_filename(&input.original_filename)?;
         let format = import_format(&input.original_filename)?;
         let metadata = fs::metadata(&input.archive_path)?;
@@ -873,6 +891,7 @@ impl Service {
         version_id: &str,
         password: Option<&str>,
     ) -> CoreResult<LibraryVersion> {
+        let _library_lock = self.library_access(false)?;
         self.require_version_visible(version_id)?;
         let conn = self.connect()?;
         let (original_filename, hash, current_state, object_path, package_id) = conn.query_row(
@@ -936,6 +955,7 @@ impl Service {
             "UPDATE package_versions SET state='extracted',extracted_path=?2 WHERE id=?1",
             params![version_id, final_dir.to_string_lossy()],
         )?;
+        maintenance::record_extraction(&tx, version_id, &final_dir)?;
         for file in files {
             // Preserve IDs referenced by confirmed selections and installation journals.
             tx.execute("INSERT INTO package_files(id,version_id,relative_path,kind,size_bytes,content_hash) VALUES (?1,?2,?3,?4,?5,?6) ON CONFLICT(version_id,relative_path) DO UPDATE SET size_bytes=excluded.size_bytes,content_hash=excluded.content_hash", params![file.id,version_id,file.relative_path,file.kind,file.size_bytes as i64,file.content_hash])?;
@@ -1071,6 +1091,10 @@ fn migrate(conn: &mut Connection) -> CoreResult<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if version < 8 {
         privacy::migrate(conn)?;
+    }
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version < 10 {
+        maintenance::migrate(conn)?;
     }
     Ok(())
 }

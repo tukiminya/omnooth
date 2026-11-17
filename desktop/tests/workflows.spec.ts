@@ -146,6 +146,8 @@ async function installTransportFixture(page: Page, coldReceipt = false, initialI
               { id: 'zip-e', relativePath: 'Locked.unitypackage', kind: 'unitypackage', sizeBytes: 100, encrypted: true },
             ] };
           }
+          if (type === 'buildCleanupPlan') return { planHash: 'cleanup-plan', versions: [['version-b', 'Test distribution · 2026-10-26@dddddddd']], stagingCount: 0, backupCount: 0, bytes: 42 };
+          if (type === 'executeCleanup') { state.snapshot.items[0].versions = state.snapshot.items[0].versions.filter(version => version.id !== 'version-b'); return { removedVersions: 1, removedDirectories: 0, retainedPaths: [] }; }
           if (type === 'extractArchive') throw new Error('ARCHIVE_PASSWORD_REQUIRED');
           if (type === 'extractArchiveWithPassword') { if (input.password !== 'test-password') throw new Error('ARCHIVE_PASSWORD_INVALID'); state.snapshot.items[0].versions[1].state = 'extracted'; return; }
           if (type === 'importArchive') {
@@ -702,4 +704,16 @@ test('archive password remains transient and an incorrect password can be retrie
   await dialog.getByRole('button',{name:'原本を展開',exact:true}).click();
   await expect(dialog).not.toBeVisible();
   expect(await page.evaluate(()=>JSON.stringify(localStorage))).not.toContain('test-password');
+});
+
+
+test('cleanup requires a separate review and confirmation after saving retention settings', async ({ page }) => {
+  await installTransportFixture(page);await page.goto('/');await page.getByRole('button',{name:'設定',exact:true}).click();
+  await page.getByRole('checkbox',{name:/過去のバージョンを保持する/}).uncheck();
+  await page.getByRole('button',{name:'設定を保存して整理内容を確認'}).click();
+  const dialog=page.getByRole('dialog',{name:'ライブラリの整理'});
+  await expect(dialog).toContainText('2026-10-26@dddddddd');
+  expect(await page.evaluate(()=>(window as any).__workflowFixture.commands)).not.toContain('executeCleanup');
+  await dialog.getByRole('button',{name:'確認した対象を整理する'}).click();await expect(dialog).toContainText('整理が完了しました。');
+  expect(await page.evaluate(()=>(window as any).__workflowFixture.snapshot.items[0].versions.length)).toBe(1);
 });

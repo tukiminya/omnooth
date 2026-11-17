@@ -583,6 +583,7 @@ impl Service {
     }
 
     pub fn build_install_plan(&self, input: BuildInstallPlanInput) -> CoreResult<InstallPlan> {
+        let _library_lock = self.library_access(false)?;
         for selection in &input.selections {
             self.require_version_visible(&selection.version_id)?;
         }
@@ -899,6 +900,7 @@ impl Service {
         input: InstallItemInput,
         unity: &dyn UnityGateway,
     ) -> CoreResult<InstallationJob> {
+        let _library_lock = self.library_access(false)?;
         if input.idempotency_key.is_empty() || input.idempotency_key.len() > 128 {
             return Err(CoreError::Invalid("INVALID_IDEMPOTENCY_KEY"));
         }
@@ -1046,6 +1048,7 @@ impl Service {
         job_id: &str,
         unity: &dyn UnityGateway,
     ) -> CoreResult<InstallationJob> {
+        let _library_lock = self.library_access(false)?;
         let conn = self.connect()?;
         let job = load_job(&conn, job_id)?;
         let _lock = self.installation_lock(&job.project_id)?;
@@ -1176,6 +1179,7 @@ impl Service {
         mode: RecoveryMode,
         unity: &dyn UnityGateway,
     ) -> CoreResult<RecoveryReport> {
+        let _library_lock = self.library_access(false)?;
         let conn = self.connect()?;
         let job = load_job(&conn, job_id)?;
         let _lock = self.installation_lock(&job.project_id)?;

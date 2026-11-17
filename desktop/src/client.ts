@@ -38,6 +38,8 @@ async function getSnapshot(): Promise<AppSnapshot> {
 export const client = {
   isDesktop: desktop,
   getSnapshot,
+  async buildCleanupPlan(): Promise<import('./contracts').CleanupPlan> { return dispatch('buildCleanupPlan'); },
+  async executeCleanup(planHash: string): Promise<import('./contracts').CleanupReport> { return dispatch('executeCleanup', { planHash }); },
   async privacyAction(type: 'acknowledgePrivacyNotice' | 'unlockHiddenItems' | 'lockHiddenItems', item?: { itemId: string; hidden: boolean }): Promise<AppSnapshot> {
     await dispatch(item ? 'setItemHidden' : type, item);
     return getSnapshot();

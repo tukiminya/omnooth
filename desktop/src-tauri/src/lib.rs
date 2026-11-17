@@ -124,6 +124,8 @@ fn command_name(command: &ApplicationCommand) -> &'static str {
         ApplicationCommand::LockHiddenItems => "lockHiddenItems",
         ApplicationCommand::SetItemHidden { .. } => "setItemHidden",
         ApplicationCommand::ExtractArchiveWithPassword { .. } => "extractArchiveWithPassword",
+        ApplicationCommand::BuildCleanupPlan => "buildCleanupPlan",
+        ApplicationCommand::ExecuteCleanup { .. } => "executeCleanup",
         ApplicationCommand::GetSnapshot => "getSnapshot",
         ApplicationCommand::SearchItems { .. } => "searchItems",
         ApplicationCommand::UpdateItem { .. } => "updateItem",

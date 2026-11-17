@@ -1138,3 +1138,45 @@ fn custom_versions_are_immutable_and_require_explicit_dependency_files() {
         "DEPENDENCY_VERSION_CONFLICT"
     );
 }
+
+#[test]
+fn cleanup_removes_only_expired_unexecuted_plans_and_closed_backups() {
+    let w = Workspace::new();
+    let item = w.import(
+        "Cleanup.unitypackage",
+        &[("Assets/Cleanup.txt", A, Some(b"fixture"))],
+    );
+    let plan = w.plan(
+        &item.versions[0],
+        vec![item.versions[0].files[0].id.clone()],
+    );
+    let conn = rusqlite::Connection::open(w.root.join("app/omnooth.sqlite")).unwrap();
+    assert_eq!(w.service.build_cleanup_plan().unwrap().staging_count, 0);
+    conn.execute(
+        "UPDATE install_plans SET created_at='2000-01-01T00:00:00Z' WHERE id=?1",
+        [&plan.id],
+    )
+    .unwrap();
+    let cleanup = w.service.build_cleanup_plan().unwrap();
+    assert_eq!(cleanup.staging_count, 1);
+    w.service.execute_cleanup(&cleanup.plan_hash).unwrap();
+    assert!(!w.root.join("app/install-staging").join(plan.id).exists());
+    let job = w.install(&item.versions[0], &FakeUnity::success());
+    conn.execute(
+        "UPDATE install_jobs SET created_at='2000-01-01T00:00:00Z' WHERE id=?1",
+        [&job.id],
+    )
+    .unwrap();
+    let cleanup = w.service.build_cleanup_plan().unwrap();
+    assert_eq!(cleanup.backup_count, 1);
+    w.service.execute_cleanup(&cleanup.plan_hash).unwrap();
+    assert_eq!(
+        w.service
+            .get_installations(&w.project.id)
+            .unwrap()
+            .packages
+            .len(),
+        1
+    );
+    assert!(fs::read(w.project.path.clone() + "/Assets/Cleanup.txt").is_ok());
+}

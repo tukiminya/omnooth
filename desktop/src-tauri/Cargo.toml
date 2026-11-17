@@ -9,6 +9,9 @@ name = "omnooth_desktop"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
+aes-gcm = { version = "0.10.3", features = ["zeroize"] }
+getrandom = "0.4"
+keyring = { version = "4.2.0", features = ["apple-native-keyring-store"] }
 omnooth-core = { version = "0.1.0", path = "../../crates/omnooth-core" }
 omnooth-unity = { version = "0.1.0", path = "../../crates/omnooth-unity" }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -19,6 +22,7 @@ tauri-plugin-deep-link = "2"
 tauri-plugin-dialog = "~2.7.2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+zeroize = "=1.9.0"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -49,9 +49,9 @@ pnpm --dir desktop tauri build --debug --bundles app --config '{"bundle":{"activ
 
 同じ `sourceIdentity` の受信は既存ジョブにまとめる。待機中のジョブは新しい受付 receipt と URL を使い、受付時に保存した設定は保持する。ダウンロード中の重複は別ジョブを作らず、現在の処理と表示は最初に受け取った receipt のまま進める。失敗・期限切れ時に新しい URL が届いていれば、同じ job ID を新しい receipt で再待機し、次の試行に使う。それ以外は新しい Deep Link を待つ。成功済み source の再通知は保存済み結果を返し、再ダウンロードしない。
 
-各ジョブの `libraryPath` と `extractArchives` は Deep Link を受け取った時点で固定する。その後に一般設定を変更しても、待機中のジョブには反映しない。再起動時、保存済みの `queued` / `downloading` ジョブは URL が失われるため `awaitingUrl` になり、新しい Deep Link で同じジョブ ID と初回設定を使って再開する。期限内の自動再開は未実装。
+各ジョブの `libraryPath` と `extractArchives` は Deep Link を受け取った時点で固定する。その後に一般設定を変更しても、待機中のジョブには反映しない。再起動時、保存済みの `queued` / `downloading` ジョブは URL が失われるため `awaitingUrl` になり、新しい Deep Link で同じジョブ ID と初回設定を使って再開する。OS 資格情報ストアの鍵を使う暗号化保管が利用でき、有効期限を検証できる場合は自動再開する。
 
-署名付き `dlurl` と `order_id` はプロセス内の `ParsedItemImport` にのみ保持し、queue JSON へ書き込まない。JSON は `id`、安全な `receipt`、`extractArchives`、`libraryPath`、`status`、`errorCode`、`localItemId` のみを含む。メモリー上限は2000件。`appData/logs/` のセッション JSONL は各256 KiBまでを4セグメントで循環し、最大8セッション分を保持する。OS 資格情報による暗号化は未実装であり、期限前 URL の自動復旧も行わない。
+署名付き `dlurl` と `order_id` はプロセス内の `ParsedItemImport` にのみ保持し、queue JSON へ書き込まない。JSON は `id`、安全な `receipt`、`extractArchives`、`libraryPath`、`status`、`errorCode`、`localItemId` のみを含む。メモリー上限は2000件。`appData/logs/` のセッション JSONL は各256 KiBまでを4セグメントで循環し、最大8セッション分を保持する。署名 URL は別の protected-requests に AES-256-GCM で暗号化し、鍵を OS 資格情報へ保存する。新しい nonce とジョブ ID の認証を使い、再起動時に受信情報と期限を再検証する。期限が不明・切れている場合や鍵が使えない場合は新リンクを待つ。キュー JSON に URL や注文 ID は入れない。成功・失効・失敗で対応する暗号文を削除する。
 
 画面下部の「ログ」は「マニュアル」の直上にある。現在のセッションを表示し、ダイアログを開いている間は1秒ごとに更新する。情報・警告・エラーのレベル絞り込みと手動更新ができる。ロガーは URL と、`dlurl`、`order_id`、password/token、authorization 等の既知の機密キーに続く値を伏せる。
 
@@ -86,7 +86,7 @@ BOOTH 実ファイルの進行状況と未完了の検証項目は [BOOTH 取り
 
 macOS / Unity 2022.3.22f1 の一時プロジェクトで、テキスト fixture の実 ImportPackage・完了通知・内容・GUID と `.meta` の一致を確認した。Windows / Linux、VRChat 実商品、ドメインリロードを伴う途中復旧は未確認。[使い方・実装範囲・検証](../docs/unity-installation.md) と [アダプターの通信](../unity/com.omnooth.editor/README.md) を参照する。2026-11-06 の独立 ZIP アダプター API も残しているが、本体は所有台帳を持つ共通適用 service を使う。
 
-商品情報の保存・編集、OR / AND・引用符・shop / category / tag / is:starred / age の検索、商品説明の明示的な見出しから抽出した更新履歴表示を追加した。外部 HTML は実行せず本文として表示する。共通カスタムはライブラリ詳細から作成・編集できる。改変済み unitypackage と完全一致依存の安定マニフェストで版を識別し、表示先は依存と分離する。依存ファイルは適用確認時に明示選択する。非表示は専用の初回説明を了承して利用する。解除は macOS LocalAuthentication / Windows Hello を使い、成功後の5分間だけバックエンドの表示セッションを有効にする。アプリから離れると失効する。Linux は操作を表示しない。OS 認証ダイアログの実操作は未確認。外部拡張の標準入出力は後続。過去の版は現在すべて保持し、保持設定の保存値を使う安全な整理処理も後続。BOOTH の署名 URL を OS 資格情報で暗号化して保管する処理、再起動後に期限内の URL を自動再開する処理は未実装。今回の実装計画は [実装計画](../docs/implementation-plan.md) に記録した。
+商品情報の保存・編集、OR / AND・引用符・shop / category / tag / is:starred / age の検索、商品説明の明示的な見出しから抽出した更新履歴表示を追加した。外部 HTML は実行せず本文として表示する。共通カスタムはライブラリ詳細から作成・編集できる。改変済み unitypackage と完全一致依存の安定マニフェストで版を識別し、表示先は依存と分離する。依存ファイルは適用確認時に明示選択する。非表示は専用の初回説明を了承して利用する。解除は macOS LocalAuthentication / Windows Hello を使い、成功後の5分間だけバックエンドの表示セッションを有効にする。アプリから離れると失効する。Linux は操作を表示しない。OS 認証ダイアログの実操作は未確認。外部拡張の標準入出力は後続。過去の版は現在すべて保持し、保持設定の保存値を使う安全な整理処理も後続。BOOTH の署名 URL の暗号化保管と期限内の自動再開を追加した。OS 資格情報の実操作は各 OS で追加確認が必要。今回の実装計画は [実装計画](../docs/implementation-plan.md) に記録した。
 
 ## Figma とフォント
 

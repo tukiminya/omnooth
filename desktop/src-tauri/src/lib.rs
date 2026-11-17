@@ -3,6 +3,7 @@ mod authentication;
 mod booth_import;
 mod deep_link_registration;
 mod import_queue;
+mod request_vault;
 
 use activity_log::{ActivityLog, LogLevel, LogSnapshot};
 use booth_import::{DeepLinkStatus, ReceiverState};
@@ -246,13 +247,19 @@ pub fn run() {
                 "ライブラリとデータベースを開きました",
                 None,
             )?;
-            let queue = match ImportQueue::open(data_directory) {
+            let mut queue = match ImportQueue::open(data_directory) {
                 Ok(queue) => queue,
                 Err(error) => {
                     let _ = logs.record(LogLevel::Error, "queue.restore", error.code(), None);
                     return Err(error.into());
                 }
             };
+            match request_vault::RequestVault::open(data_directory) {
+                Ok(vault) => queue.enable_protected_restart(vault)?,
+                Err(code) => {
+                    logs.record(LogLevel::Warn, "queue.protection", code, None)?;
+                }
+            }
             let restored = queue.snapshot();
             logs.record(
                 LogLevel::Info,
@@ -351,6 +358,7 @@ pub fn run() {
                     None,
                 ),
             }
+            booth_import::start_worker(app.handle());
             record(
                 app.handle(),
                 LogLevel::Info,

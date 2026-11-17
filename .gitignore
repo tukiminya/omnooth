@@ -10,3 +10,4 @@ desktop/dist/
 desktop/src-tauri/gen/
 desktop/test-results/
 desktop/playwright-report/
+dist/

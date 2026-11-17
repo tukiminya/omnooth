@@ -1,7 +1,7 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { listen } from '@tauri-apps/api/event';
-import type { AppSettings, AppSnapshot, ArchiveBatchResult, ArchiveContents, DeepLinkStatus, ImportResult, LogSnapshot } from './contracts';
+import type { AppSettings, AppSnapshot, ArchiveBatchResult, ArchiveContents, DeepLinkStatus, ImportResult, LogSnapshot, InstallSelection, InstallPlan, InstallationJob, InstallationState, RecoveryReport } from './contracts';
 
 const desktop = isTauri();
 
@@ -101,6 +101,24 @@ export const client = {
   },
   async inspectArchive(versionId: string): Promise<ArchiveContents> {
     return dispatch('inspectArchive', { versionId });
+  },
+  async buildInstallPlan(projectId: string, selections: InstallSelection[], removePackageIds: string[] = []): Promise<InstallPlan> {
+    return dispatch('buildInstallPlan', { projectId, selections, removePackageIds });
+  },
+  async installItem(plan: InstallPlan, idempotencyKey: string): Promise<InstallationJob> {
+    return dispatch('installItem', { projectId: plan.projectId, planId: plan.id, planHash: plan.planHash, idempotencyKey });
+  },
+  async getInstallations(projectId: string): Promise<InstallationState> {
+    return dispatch('getInstallations', { projectId });
+  },
+  async pollInstallation(jobId: string): Promise<InstallationJob> {
+    return dispatch('pollInstallation', { jobId });
+  },
+  async recoverInstallation(jobId: string, mode: 'inspect' | 'restore'): Promise<RecoveryReport> {
+    return dispatch('recoverInstallation', { jobId, mode });
+  },
+  async setupUnityAdapter(projectId: string): Promise<void> {
+    return dispatch('setupUnityAdapter', { projectId });
   },
   async chooseLibraryPath(): Promise<string | null> {
     requireDesktop();

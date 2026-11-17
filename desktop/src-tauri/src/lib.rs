@@ -122,6 +122,12 @@ fn command_name(command: &ApplicationCommand) -> &'static str {
         ApplicationCommand::InspectArchive { .. } => "inspectArchive",
         ApplicationCommand::ExtractArchive { .. } => "extractArchive",
         ApplicationCommand::UpdateSettings { .. } => "updateSettings",
+        ApplicationCommand::BuildInstallPlan(_) => "buildInstallPlan",
+        ApplicationCommand::InstallItem(_) => "installItem",
+        ApplicationCommand::GetInstallations { .. } => "getInstallations",
+        ApplicationCommand::PollInstallation { .. } => "pollInstallation",
+        ApplicationCommand::RecoverInstallation { .. } => "recoverInstallation",
+        ApplicationCommand::SetupUnityAdapter { .. } => "setupUnityAdapter",
     }
 }
 
@@ -135,7 +141,7 @@ async fn dispatch(
     tauri::async_runtime::spawn_blocking(move || {
         let name = command_name(&command);
         record(&app, LogLevel::Info, name, "処理を開始しました", None);
-        match service.dispatch(command) {
+        match service.dispatch_with_unity(command, &omnooth_unity::EditorGateway) {
             Ok(value) => {
                 record(&app, LogLevel::Info, name, "処理が完了しました", None);
                 Ok(value)
@@ -237,6 +243,36 @@ pub fn run() {
                 worker_running: AtomicBool::new(false),
                 incoming,
             });
+            let installation_handle = app.handle().clone();
+            std::thread::Builder::new()
+                .name("unity-installation-results".into())
+                .spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    let backend = installation_handle.state::<Backend>();
+                    if let Ok(jobs) = backend.service.pending_installation_jobs() {
+                        for job in jobs {
+                            if let Ok(result) = backend
+                                .service
+                                .poll_installation(&job.id, &omnooth_unity::EditorGateway)
+                            {
+                                if result.status != "waitingForUnity" {
+                                    let level = if result.status == "succeeded" {
+                                        LogLevel::Info
+                                    } else {
+                                        LogLevel::Error
+                                    };
+                                    record(
+                                        &installation_handle,
+                                        level,
+                                        "unity.installation",
+                                        result.error_code.as_deref().unwrap_or(&result.status),
+                                        Some(&result.id),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                })?;
             let panic_handle = app.handle().clone();
             std::panic::set_hook(Box::new(move |info| {
                 // Panic payloads from dependencies may contain credentials; retain only location.

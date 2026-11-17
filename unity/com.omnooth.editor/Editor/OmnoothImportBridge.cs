@@ -47,6 +47,14 @@ namespace Omnooth.Editor
         public string error;
     }
 
+    [Serializable]
+    internal sealed class AdapterStatus
+    {
+        public int protocol_version = 1;
+        public long updated_at;
+        public bool is_busy;
+    }
+
     /// <summary>
     /// Polls a local request manifest and serializes imports through Unity's
     /// official non-interactive ImportPackage API. State is persisted before
@@ -62,6 +70,7 @@ namespace Omnooth.Editor
         private static readonly string RequestPath = Path.Combine(Root, "request.json");
         private static readonly string ResultPath = Path.Combine(Root, "result.json");
         private static readonly string StatePath = Path.Combine(Root, "state.json");
+        private static readonly string StatusPath = Path.Combine(Root, "status.json");
         private static double _nextPoll;
         private static ImportRequest _request;
         private static ImportState _state;
@@ -85,6 +94,13 @@ namespace Omnooth.Editor
             _nextPoll = EditorApplication.timeSinceStartup + PollIntervalSeconds;
             try
             {
+                AtomicWrite(StatusPath, JsonUtility.ToJson(new AdapterStatus
+                {
+                    updated_at = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                    is_busy = EditorApplication.isCompiling || EditorApplication.isUpdating || EditorApplication.isPlayingOrWillChangePlaymode ||
+                        (_state != null && string.IsNullOrEmpty(_state.terminal_status) && !string.IsNullOrEmpty(_state.active_path))
+                }));
+                if (EditorApplication.isCompiling || EditorApplication.isUpdating || EditorApplication.isPlayingOrWillChangePlaymode) return;
                 if (_stateCorrupt)
                 {
                     if (!TryReadRequest(out var recoveredRequest, out var fingerprint)) return;
@@ -172,7 +188,7 @@ namespace Omnooth.Editor
             if (!File.Exists(RequestPath)) return false;
             var bytes = File.ReadAllBytes(RequestPath);
             request = JsonUtility.FromJson<ImportRequest>(System.Text.Encoding.UTF8.GetString(bytes));
-            ValidateRequest(request);
+            ValidateRequest(request, request == null || !HasMatchingTerminalResult(request.job_id));
             using (var sha256 = SHA256.Create())
                 fingerprint = BitConverter.ToString(sha256.ComputeHash(bytes)).Replace("-", string.Empty);
             return true;
@@ -213,11 +229,11 @@ namespace Omnooth.Editor
             }
         }
 
-        private static void ValidateRequest(ImportRequest request)
+        private static void ValidateRequest(ImportRequest request, bool requireFiles)
         {
             if (request == null || request.protocol_version != ProtocolVersion || !ValidId(request.job_id) ||
-                request.packages == null || request.packages.Length == 0)
-                throw new InvalidDataException("Request manifest has an invalid version, job id, or empty package list.");
+                request.packages == null)
+                throw new InvalidDataException("Request manifest has an invalid version, job id, or package list.");
             var operations = new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
             var fileNames = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var entry in request.packages)
@@ -226,7 +242,7 @@ namespace Omnooth.Editor
                     throw new InvalidDataException("Package operation ids must be valid and unique.");
                 if (string.IsNullOrWhiteSpace(entry.path) || !Path.IsPathRooted(entry.path) ||
                     !string.Equals(Path.GetExtension(entry.path), ".unitypackage", StringComparison.OrdinalIgnoreCase) ||
-                    !File.Exists(entry.path))
+                    (requireFiles && !File.Exists(entry.path)))
                     throw new InvalidDataException("Every package path must identify an existing absolute .unitypackage file.");
                 var canonical = Path.GetFullPath(entry.path);
                 if (!string.Equals(canonical, entry.path, StringComparison.Ordinal))
@@ -242,6 +258,7 @@ namespace Omnooth.Editor
             if (_request == null || _state == null || _state.job_id != _request.job_id) return;
             if (_state.next_index >= _request.packages.Length)
             {
+                AssetDatabase.Refresh();
                 Finish("completed", null);
                 return;
             }

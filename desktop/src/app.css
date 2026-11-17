@@ -284,3 +284,16 @@ button.settings-category { cursor: pointer; }
   .log-session { order: 3; flex-basis: 100%; }
   .log-list { padding: 0 16px; }
 }
+
+.installation-dialog { width: min(calc(100% - 48px), 780px); }
+.installation-body { padding: 8px 30px 28px; overflow-y: auto; overflow-wrap: anywhere; }
+.installation-body > p { color: var(--muted); }
+.installation-body section { margin-top: 24px; }
+.installation-body h3 { font-size: 16px; }
+.installation-status { padding: 16px; border: 1px solid var(--soft-line); border-radius: 12px; }
+.installation-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.install-plan { padding: 16px; background: var(--surface, #f8f8f8); border-radius: 12px; }
+.install-plan summary { cursor: pointer; }
+.install-paths { max-height: 220px; overflow-y: auto; padding-left: 20px; font-size: 12px; }
+.installed-package { display: flex; gap: 16px; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--soft-line); }
+.installed-package p { margin: 4px 0; font-size: 12px; }

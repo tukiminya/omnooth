@@ -22,11 +22,14 @@ pub use booth_download::{
 pub use deep_link::{parse_item_import_deep_link, ItemImportReceipt, ParsedItemImport};
 mod archive_contents;
 mod booth_download;
+mod installation;
+mod unitypackage;
 pub use archive_contents::{
     ArchiveContents, ArchiveEntry, PreparedUnityImport, PreparedUnityPackage,
 };
+pub use installation::*;
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 const MAX_ARCHIVE_ENTRIES: usize = 100_000;
 const MAX_EXPANDED_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const MAX_BOOTH_DOWNLOAD_BYTES: u64 = 4 * 1024 * 1024 * 1024;
@@ -35,6 +38,8 @@ const MAX_BOOTH_DOWNLOAD_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 pub enum CoreError {
     #[error("{0}")]
     Invalid(&'static str),
+    #[error("{code}: {path}")]
+    InstallationConflict { code: &'static str, path: String },
     #[error("{0}")]
     Io(#[from] std::io::Error),
     #[error("{0}")]
@@ -51,6 +56,7 @@ impl CoreError {
     pub fn code(&self) -> &'static str {
         match self {
             Self::Invalid(code) => code,
+            Self::InstallationConflict { code, .. } => code,
             Self::Io(_) => "IO_ERROR",
             Self::Database(_) => "DATABASE_ERROR",
             Self::Download(code) => code,
@@ -164,6 +170,12 @@ pub enum ApplicationCommand {
     InspectArchive { version_id: String },
     ExtractArchive { version_id: String },
     UpdateSettings { settings: AppSettings },
+    BuildInstallPlan(BuildInstallPlanInput),
+    InstallItem(InstallItemInput),
+    GetInstallations { project_id: String },
+    PollInstallation { job_id: String },
+    RecoverInstallation { job_id: String, mode: RecoveryMode },
+    SetupUnityAdapter { project_id: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -422,6 +434,14 @@ impl Service {
     }
 
     pub fn dispatch(&self, command: ApplicationCommand) -> CoreResult<serde_json::Value> {
+        self.dispatch_with_unity(command, &DisconnectedUnity)
+    }
+
+    pub fn dispatch_with_unity(
+        &self,
+        command: ApplicationCommand,
+        unity: &dyn UnityGateway,
+    ) -> CoreResult<serde_json::Value> {
         match command {
             ApplicationCommand::GetSnapshot => serde_json::to_value(self.snapshot()?),
             ApplicationCommand::LinkProject { directory_path } => {
@@ -438,6 +458,25 @@ impl Service {
             }
             ApplicationCommand::UpdateSettings { settings } => {
                 serde_json::to_value(self.update_settings(settings)?)
+            }
+            ApplicationCommand::BuildInstallPlan(input) => {
+                serde_json::to_value(self.build_install_plan(input)?)
+            }
+            ApplicationCommand::InstallItem(input) => {
+                serde_json::to_value(self.install_item(input, unity)?)
+            }
+            ApplicationCommand::GetInstallations { project_id } => {
+                serde_json::to_value(self.get_installations(&project_id)?)
+            }
+            ApplicationCommand::PollInstallation { job_id } => {
+                serde_json::to_value(self.poll_installation(&job_id, unity)?)
+            }
+            ApplicationCommand::RecoverInstallation { job_id, mode } => {
+                serde_json::to_value(self.recover_installation(&job_id, mode, unity)?)
+            }
+            ApplicationCommand::SetupUnityAdapter { project_id } => {
+                self.setup_unity_adapter(&project_id, unity)?;
+                Ok(serde_json::Value::Null)
             }
         }
         .map_err(|_| CoreError::Invalid("SERIALIZATION_ERROR"))
@@ -740,12 +779,9 @@ impl Service {
             "UPDATE package_versions SET state='extracted',extracted_path=?2 WHERE id=?1",
             params![version_id, final_dir.to_string_lossy()],
         )?;
-        tx.execute(
-            "DELETE FROM package_files WHERE version_id=?1",
-            [version_id],
-        )?;
         for file in files {
-            tx.execute("INSERT INTO package_files(id,version_id,relative_path,kind,size_bytes,content_hash) VALUES (?1,?2,?3,?4,?5,?6)", params![file.id,version_id,file.relative_path,file.kind,file.size_bytes as i64,file.content_hash])?;
+            // Preserve IDs referenced by confirmed selections and installation journals.
+            tx.execute("INSERT INTO package_files(id,version_id,relative_path,kind,size_bytes,content_hash) VALUES (?1,?2,?3,?4,?5,?6) ON CONFLICT(version_id,relative_path) DO UPDATE SET size_bytes=excluded.size_bytes,content_hash=excluded.content_hash", params![file.id,version_id,file.relative_path,file.kind,file.size_bytes as i64,file.content_hash])?;
         }
         tx.commit()?;
         let date = conn.query_row(
@@ -862,6 +898,10 @@ fn migrate(conn: &mut Connection) -> CoreResult<()> {
         tx.execute_batch("ALTER TABLE package_versions ADD COLUMN source_updated_at TEXT;")?;
         tx.pragma_update(None, "user_version", 4)?;
         tx.commit()?;
+    }
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version < 5 {
+        installation::migrate(conn)?;
     }
     Ok(())
 }
@@ -1380,7 +1420,7 @@ mod tests {
         let version: i64 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, SCHEMA_VERSION);
         let file_count: i64 = conn
             .query_row(
                 "SELECT count(*) FROM package_files WHERE version_id='v'",

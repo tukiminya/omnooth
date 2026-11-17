@@ -5,10 +5,11 @@ import i18n from './i18n';
 import { client } from './client';
 import { Icon } from './Icon';
 import { LogDialog } from './LogDialog';
+import { InstallationDialog } from './InstallationDialog';
 import { AppToaster } from './AppToaster';
 import { ArchiveContentsList } from './ArchiveContentsList';
 import { formatBytes } from './formatBytes';
-import type { AppSettings, AppSnapshot, ArchiveContents, DeepLinkStatus, LibraryItem, LibraryVersion, Project } from './contracts';
+import type { AppSettings, AppSnapshot, ArchiveContents, DeepLinkStatus, LibraryItem, LibraryVersion, Project, InstallSelection } from './contracts';
 import './fonts.css';
 import './app.css';
 
@@ -27,6 +28,7 @@ function App() {
   const [chosenUnityPackages, setChosenUnityPackages] = useState<string[]>([]);
   const [archivePreview, setArchivePreview] = useState<{ versionId: string; status: 'loading' | 'ready' | 'error'; entries: ArchiveContents['entries'] } | null>(null);
   const [archivePreviewAttempt, setArchivePreviewAttempt] = useState(0);
+  const [installation, setInstallation] = useState<{ project: Project; selections: InstallSelection[] } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState<AppSettings | null>(null);
@@ -325,12 +327,13 @@ function App() {
           <div className="page-scroll">
             {isLoading ? <LoadingState label={t('loading')} /> : activePage === 'projects' ? <ProjectsPage projects={orderedProjects} allCount={snapshot?.projects.length ?? 0} selectedId={selectedProjectId} selectedProject={selectedProject} sort={projectSort} onSort={setProjectSort} query={query} onQuery={setQuery} onLink={linkProject} onSelect={(project) => { setSelectedProjectId(project.id); toast.info(t('projectSelected', { name: project.name })); }} busy={busy} t={t} /> : <LibraryPage items={filteredItems} selectedItem={selectedItem} selectedVersion={selectedVersion} query={query} onQuery={setQuery} onAdd={addArchives} onSelect={(item) => { setSelectedItemId(item.id); setSelectedVersionId(latestVersion(item.versions)?.id ?? null); setChosenUnityPackages([]); }} onVersion={(id) => { setSelectedVersionId(id); setChosenUnityPackages([]); }} onExtract={extractSelected} archivePreview={currentPreview} onRetryPreview={() => setArchivePreviewAttempt((value) => value + 1)} busy={busy} selectedUnityPackages={visibleSelection} onTogglePackage={togglePackage} onMovePackage={movePackage} project={selectedProject} t={t} />}
           </div>
-          {activePage === 'projects' ? <ProjectGuide t={t} /> : <PackageDetails item={selectedItem} version={selectedVersion} selectedCount={visibleSelection.length} project={selectedProject} busy={busy} onAdd={addArchives} onSettings={openSettings} t={t} />}
+          {activePage === 'projects' ? <ProjectGuide t={t} project={selectedProject} onManage={() => { if (selectedProject) setInstallation({ project: selectedProject, selections: [] }); }} /> : <PackageDetails item={selectedItem} version={selectedVersion} selectedCount={visibleSelection.length} project={selectedProject} busy={busy} onAdd={addArchives} onSettings={openSettings} onApply={() => { if (selectedProject && selectedVersion) setInstallation({ project: selectedProject, selections: [{ versionId: selectedVersion.id, fileIds: visibleSelection }] }); }} t={t} />}
         </main>
       </div>
+      {installation && <InstallationDialog project={installation.project} initialSelections={installation.selections} onClose={() => setInstallation(null)} t={t} />}
       {logsOpen && <LogDialog getLogs={client.getLogs} onClose={() => setLogsOpen(false)} t={t} />}
       {settingsOpen && settingsDraft && <SettingsDialog draft={settingsDraft} setDraft={setSettingsDraft} versions={snapshot?.items.flatMap((item) => item.versions.map((version) => ({ itemTitle: item.title, version })) ) ?? []} tab={settingsTab} setTab={setSettingsTab} busy={busy} deepLinkStatus={deepLinkStatus} deepLinkError={deepLinkError} onRegisterDeepLink={registerDeepLink} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onChoosePath={chooseLibraryPath} t={t} />}
-      <AppToaster container={logsOpen ? '.log-dialog' : settingsOpen ? '.settings-dialog' : null} />
+      <AppToaster container={installation ? '.installation-dialog' : logsOpen ? '.log-dialog' : settingsOpen ? '.settings-dialog' : null} />
     </div>
   );
 
@@ -393,7 +396,7 @@ function LibraryPage({ items, selectedItem, selectedVersion, query, onQuery, onA
   </section>;
 }
 
-function PackageDetails({ item, version, selectedCount, project, busy, onAdd, onSettings, t }: { item: LibraryItem | null; version: LibraryVersion | null; selectedCount: number; project: Project | null; busy: boolean; onAdd: () => void; onSettings: () => void; t: (key: string, options?: Record<string, unknown>) => string }) {
+function PackageDetails({ item, version, selectedCount, project, busy, onAdd, onSettings, onApply, t }: { item: LibraryItem | null; version: LibraryVersion | null; selectedCount: number; project: Project | null; busy: boolean; onAdd: () => void; onSettings: () => void; onApply: () => void; t: (key: string, options?: Record<string, unknown>) => string }) {
   return <aside className="right-rail">
     <h2>{t('packageDetails')}</h2>
     {item && version ? <>
@@ -403,14 +406,14 @@ function PackageDetails({ item, version, selectedCount, project, busy, onAdd, on
       {version.files.length > 6 && <p className="subtle">{t('moreFiles', { count: version.files.length - 6 })}</p>}
       <hr /><div className="rail-label-row"><strong>{t('version')}</strong><span className="mono">{version.label}</span></div><p className="subtle mono">SHA-256 {version.contentHash}</p>
       <div className="rail-state"><strong>{version.state === 'extracted' ? t('extracted') : version.state === 'ready' ? t('ready') : t('storedOnly')}</strong><p>{version.state === 'ready' ? t('readyHint') : t('storedStatusHint')}</p></div>
-      <hr /><h3>{t('unityImport')}</h3><p className="rail-description">{project ? t('selectionForProject', { project: project.name, count: selectedCount }) : t('selectProjectBeforeInstall')}</p><button className="button primary full" disabled>{t('applyUnavailable')}</button><p className="rail-caption">{t('applyPending')}</p>
+      <hr /><h3>{t('unityImport')}</h3><p className="rail-description">{project ? t('selectionForProject', { project: project.name, count: selectedCount }) : t('selectProjectBeforeInstall')}</p><button className="button primary full" onClick={onApply} disabled={busy || !project || selectedCount === 0}>{t('reviewInstall')}</button><p className="rail-caption">{t('applyHint')}</p>
     </> : <div className="rail-empty"><p>{t('emptyDetail')}</p><button className="text-button" onClick={onAdd} disabled={busy}>{t('addFiles')}</button></div>}
     <button className="rail-setting" onClick={onSettings}><Icon name="settings" size={16} />{t('librarySettings')}</button>
   </aside>;
 }
 
-function ProjectGuide({ t }: { t: (key: string, options?: Record<string, unknown>) => string }) {
-  return <aside className="right-rail guide-rail"><h2><Icon name="link" size={20} />{t('projectGuide')}</h2><p>{t('projectGuideIntro')}</p><hr /><div className="guide-step"><strong>{t('guideStepOne')}</strong><p>{t('guideStepOneHint')}</p></div><div className="guide-step"><strong>{t('guideStepTwo')}</strong><p>{t('guideStepTwoHint')}</p></div><div className="guide-step"><strong>{t('guideStepThree')}</strong><p>{t('guideStepThreeHint')}</p></div><div className="guide-callout"><strong>{t('projectSafetyTitle')}</strong><p>{t('projectSafety')}</p></div></aside>;
+function ProjectGuide({ t, project, onManage }: { project: Project | null; onManage: () => void; t: (key: string, options?: Record<string, unknown>) => string }) {
+  return <aside className="right-rail guide-rail"><h2><Icon name="link" size={20} />{t('projectGuide')}</h2>{project && <button className="button secondary full" onClick={onManage}>{t('manageInstallations')}</button>}<p>{t('projectGuideIntro')}</p><hr /><div className="guide-step"><strong>{t('guideStepOne')}</strong><p>{t('guideStepOneHint')}</p></div><div className="guide-step"><strong>{t('guideStepTwo')}</strong><p>{t('guideStepTwoHint')}</p></div><div className="guide-step"><strong>{t('guideStepThree')}</strong><p>{t('guideStepThreeHint')}</p></div><div className="guide-callout"><strong>{t('projectSafetyTitle')}</strong><p>{t('projectSafety')}</p></div></aside>;
 }
 
 function SettingsDialog({ draft, setDraft, versions, tab, setTab, busy, deepLinkStatus, deepLinkError, onRegisterDeepLink, onClose, onSave, onChoosePath, t }: { draft: AppSettings; setDraft: (value: AppSettings) => void; versions: Array<{ itemTitle: string; version: LibraryVersion }>; tab: SettingsTab; setTab: (value: SettingsTab) => void; busy: boolean; deepLinkStatus: DeepLinkStatus | null; deepLinkError: string; onRegisterDeepLink: () => void; onClose: () => void; onSave: () => void; onChoosePath: () => void; t: (key: string, options?: Record<string, unknown>) => string }) {

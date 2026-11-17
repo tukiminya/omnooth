@@ -49,12 +49,15 @@ impl PreparedUnityImport {
     }
 }
 
-struct IndexedEntry {
-    index: usize,
-    entry: ArchiveEntry,
+pub(super) struct IndexedEntry {
+    pub(super) index: usize,
+    pub(super) entry: ArchiveEntry,
 }
 
-fn zip_entries(archive: &mut ZipArchive<File>, version_id: &str) -> CoreResult<Vec<IndexedEntry>> {
+pub(super) fn zip_entries(
+    archive: &mut ZipArchive<File>,
+    version_id: &str,
+) -> CoreResult<Vec<IndexedEntry>> {
     if archive.len() > MAX_ARCHIVE_ENTRIES {
         return Err(CoreError::Archive("ARCHIVE_TOO_MANY_ENTRIES".into()));
     }

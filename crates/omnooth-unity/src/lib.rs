@@ -19,7 +19,9 @@ const REQUEST_FILE: &str = "request.json";
 const RESULT_FILE: &str = "result.json";
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+mod installation;
 mod zip_import;
+pub use installation::EditorGateway;
 pub use zip_import::{poll_zip_import, start_zip_import, ZipImportError};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -224,6 +226,16 @@ fn validate_project(path: &Path) -> Result<PathBuf, AdapterError> {
             "Unity project must be an existing directory with an Assets folder".into(),
         ));
     }
+    for path in [
+        canonical.join("Library"),
+        canonical.join("Library").join(ADAPTER_DIRECTORY),
+    ] {
+        if fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink() || !m.is_dir()) {
+            return Err(AdapterError::Invalid(
+                "Unity adapter directories must not be links or files".into(),
+            ));
+        }
+    }
     Ok(canonical)
 }
 
@@ -242,11 +254,6 @@ fn validate_request_inner(
         )));
     }
     validate_id(&request.job_id, "job_id")?;
-    if request.packages.is_empty() {
-        return Err(AdapterError::Invalid(
-            "packages must contain at least one unitypackage".into(),
-        ));
-    }
     let mut operation_ids = std::collections::HashSet::new();
     let mut package_names = std::collections::HashSet::new();
     for package in &request.packages {

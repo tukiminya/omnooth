@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { Toaster } from 'sonner';
 import { Icon } from './Icon';
 
-export function AppToaster({ container }: { container: '.settings-dialog' | '.log-dialog' | null }) {
+export function AppToaster({ container }: { container: '.settings-dialog' | '.log-dialog' | '.installation-dialog' | null }) {
   const { t } = useTranslation();
   const [host] = useState(() => document.createElement('div'));
 

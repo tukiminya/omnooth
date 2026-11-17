@@ -1,6 +1,6 @@
 # omnooth
 
-2026-10-27 に本体の開発を開始した。Tauri / React の本体、Rust の原本保存・ローカル取り込み・プロジェクト登録、BOOTH ダウンロードとライブラリ登録、独立した Unity アダプターを追加した。BOOTH の実ファイル検証は進行中で完了未確認。Unity 適用、依存・競合・復旧などは引き続き実装途中。起動方法と制約は [本体の開発資料](desktop/README.md)、作業状況は [実装計画](docs/implementation-plan.md) と [BOOTH 検証記録](docs/booth-import-validation.md) を参照する。
+2026-10-27 に本体の開発を開始した。Tauri / React の本体、Rust の原本保存・ローカル取り込み・プロジェクト登録、BOOTH ダウンロードとライブラリ登録、独立した Unity アダプターを追加した。BOOTH の実ファイル検証は進行中で完了未確認。2026-11-17 に Unity 適用の計画・競合検査・バックアップ・実ファイル照合・実績確定・復旧を接続した。実商品と他 OS の追加検証は継続する。起動方法と制約は [本体の開発資料](desktop/README.md)、作業状況は [実装計画](docs/implementation-plan.md) と [BOOTH 検証記録](docs/booth-import-validation.md) を参照する。
 
 次のセッションでは、まずこの README、[レビューアプリの開発資料](design-review/README.md)、`design-review/data/catalog.mjs` を読む。ここに記録した最新のユーザー指示を、過去の仕様・レビュー返信より優先する。
 
@@ -9,7 +9,7 @@
 - **Figma は最新の継続指示に従い、ツール・plugin・Computer 経由で操作しない。** 2026-10-27 の開発開始時に参照して同梱した本体アセットを使い、古い編集記録は再実行しない。
 - レビュー画面のモックと古い参照画像は削除した。復元・再生成しない。以前の Figma 編集記録は履歴であり、現在の画面デザインの正本ではない。本体の新規 UI とローカルアセットは `desktop/` に分離した。
 - **Unity に適用する単位は `.unitypackage` のみ。** 配布 ZIP 等の中から、適用する unitypackage を個別に選ぶ。複数件の順序を扱う。
-- ZIP は未展開でも収録パスを確認・検索し、unitypackage を選択できる。インポート時は選択分だけを一時展開し、一致する全件成功を確認した後に一時ファイルを削除する。原本 ZIP は保持する。[実装範囲](docs/zip-import.md) を参照する。本体の Unity 適用全体は引き続き未接続。
+- ZIP は未展開でも収録パスを確認・検索し、unitypackage を選択できる。インポート時は選択分だけを一時展開し、一致する全件成功を確認した後に一時ファイルを削除する。原本 ZIP は保持する。[実装範囲](docs/zip-import.md) を参照する。本体の適用と接続済み。[Unity 適用](docs/unity-installation.md) を参照する。
 - **PNG / PSD などの直接追加は対象外。** ファイルの直接コピー、専用配置先、PSD 変換・編集、Material への自動割当を実装しない。unitypackage の内部に含まれるテクスチャ等は通常のインポート対象。
 - **インポート先パスの変更は対象外。** unitypackage が定義する Assets パスを使う。配置テンプレート、パスのリマップ、`MoveAsset`、元の配置へ戻す操作を実装しない。ライブラリ保存先の変更は別の設定であり、残す。
 - 生成 AI に関する機能・クラウド API は対象外。以前の Cloudflare / Hono / AI SDK / Haiku 案を再導入しない。
@@ -27,7 +27,7 @@
 | --- | --- |
 | `desktop/` | Tauri 2 + React / TypeScript 本体。設定、ローカル取り込み、BOOTH 受信・ダウンロード・登録・ログ表示 |
 | `crates/omnooth-core/` | 本体用 SQLite、原本保存庫、プロジェクト検証、共有 command dispatcher |
-| `crates/omnooth-unity/` / `unity/` | 未接続の Unity アダプター。実インポートの動作確認は未完了 |
+| `crates/omnooth-unity/` / `unity/` | 本体に接続した Unity アダプター。2022.3 の小さなテキスト fixture で実インポートを確認 |
 | `design-review/` | 実行可能な React / Vite + Node の設計レビューアプリ |
 | `design-review/data/catalog.mjs` | 要件、関数契約、将来の DB、根拠、フローの本文 |
 | `design-review/src/domain/package-version.ts` | 日付と SHA-256 による版識別の参照実装。テスト済み |
@@ -47,7 +47,7 @@
 
 Tauri 2 + React / TypeScript、ローカル処理は Rust。GUI・Deep Link・ブラウザ / Unity 拡張の標準入出力アダプターは、同じコマンド DTO と application service を使う。検証・キュー・DB・権限判定を入口ごとに複製しない。キューと DB の所有者は単一起動の本体。
 
-GUI と Rust のローカル取り込みに加え、BOOTH の受信から原本登録までの初期経路を接続した。署名 URL の OS 資格情報暗号化、期限内自動再開、外部拡張、Unity 適用は後続。
+GUI と Rust のローカル取り込みに加え、BOOTH の受信から原本登録までの初期経路を接続した。署名 URL の OS 資格情報暗号化、期限内自動再開、外部拡張は後続。Unity 適用は確認済み計画から実ファイル照合・DB 確定まで接続済み。
 
 ```mermaid
 flowchart LR
@@ -58,7 +58,7 @@ flowchart LR
     APP --> UNITY["Unity Editor アダプター"]
 ```
 
-本体用 SQLite はメタデータ、原本は SHA-256 による保存庫で管理する。初期実装は `appData/omnooth.sqlite`、`Library/objects/<sha256>` と展開内容を保存する。適用用の staging / backups と全17テーブルの整合性は後続。Rust の初期マイグレーションと GUI の IPC は追加済み。
+本体用 SQLite はメタデータ、原本は SHA-256 による保存庫で管理する。初期実装は `appData/omnooth.sqlite`、`Library/objects/<sha256>` と展開内容を保存する。適用用 staging / backups、ジョブと計画、所有台帳は追加済み。共通カスタム等の全17テーブルが完成した段階ではない。Rust の初期マイグレーションと GUI の IPC は追加済み。
 
 ### 取り込みと適用
 
@@ -90,10 +90,10 @@ flowchart LR
 
 1. この文書、本体 README、レビューアプリ README、カタログと保存済みレビューを読む。削除した機能を戻さず、Figma は操作しない。
 2. BOOTH の実ファイル検証と再起動後の新リンク再開を確認する。署名 URL の保護、メタデータ取得・登録の実データ確認、アプリ表示の最終目視を記録する。
-3. 既存 Unity プロジェクトへの Editor 接続・非対話 ImportPackage・完了通知の実機検証を続ける。Unity の対象バージョンは登録プロジェクトから読む。
-4. unitypackage の安全な解析、選択、計画・競合検出、適用・確定・復旧を接続する。外部拡張と追加検証を続ける。
+3. Unity 2022.3.22f1 のテキスト fixture は実機検証済み。既存 Unity プロジェクトで実商品・Prefab / Material・ドメインリロードの追加検証を続ける。Unity の対象バージョンは登録プロジェクトから読む。
+4. Unity 適用の初期接続は完了。[実装範囲と制約](docs/unity-installation.md) を確認し、他 OS・依存編集 UI・外部拡張と追加検証を続ける。
 
-Unity アダプターの通信・導入、unitypackage 内部マニフェストの安全な解析、展開ライブラリの OS / 暗号方式対応、デスクトップ OS 認証は未検証。テスト済みと扱わず、実装の境界ごとに確認する。特に Tauri の公式 Biometric を macOS / Windows 用と決めつけない。
+Unity アダプターの通信・導入と内部マニフェスト解析は本体に接続し、テストと小さな実インポートを確認した。展開ライブラリの OS / 暗号方式対応、デスクトップ OS 認証は未検証。テスト済みと扱わず、実装の境界ごとに確認する。特に Tauri の公式 Biometric を macOS / Windows 用と決めつけない。
 
 公開 BOOTH API は 2026-10-22 に商品 7328764 / 8596249 の HTTP 200 と実フィールドを確認済み。縮小フィクスチャを保存した。全商品・認証付き取得・サービスの安定性を検証したわけではない。
 

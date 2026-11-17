@@ -1,5 +1,15 @@
 # 初期実装の検証記録
 
+## 2026-11-17 — Unity 適用の接続
+
+- 共通 service の計画・実行・実ファイル照合・DB 確定・復旧と、本体の確認・適用管理 UI を接続した。詳細は [Unity 適用](unity-installation.md) を参照する。
+- `cargo test --workspace --offline`: core 65件（単体39・適用統合17・ZIP9）、Unity adapter 8件、本体15件の計88件が成功。OS ハンドラーを変更する既存の1件は引き続き ignored。
+- TypeScript と Vite ビルド、Tauri を含む `cargo check --workspace --offline`、`cargo build -p omnooth-desktop --offline`（デバッグ実行ファイル）、`cargo fmt --all --check` が成功。Playwright 全26件も成功し、適用の確認・順序・planHash・再試行・復旧を含む。
+- Unity 2022.3.22f1 / macOS の一時プロジェクトで実 ImportPackage を実行し、要求・操作 ID、正常完了、asset / asset.meta の完全一致、GUID を確認した。ライセンス IPC の過去の失敗記録とは別の、今回成功した検証。実機の小さな自作テキスト fixture と VRChat 実商品全体は区別する。
+- Unity が書き出した gzip / tar に含まれた PAX・AppleDouble を解析で扱い、パス・サイズの PAX 上書きは拒否する。共有フォルダーのメタデータ変更とユーザー作業のある新規フォルダーの復旧を停止する。完了通知後も Editor が idle になるまで成功を確定しない。
+- ここに記載した結果はローカル実行。GitHub Actions、Windows / Linux の実 Unity、Prefab / Material とドメインリロード中の復旧は未確認。Figma、設計レビュー DB と承認、既存の `dist/omnooth` は変更していない。
+
+
 2026-10-27。今回の開発単位は [実装計画](implementation-plan.md)、機能の制約と起動方法は [本体 README](../desktop/README.md) を参照する。
 
 ## 2026-10-28：アイコンと配布ビルド

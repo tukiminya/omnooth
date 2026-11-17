@@ -26,7 +26,7 @@ flowchart TD
     E -->|待機・失敗・中断・不一致| G["一時ファイルを保持"]
 ```
 
-本体の「適用」は未接続のまま。上記は ZIP 用の準備と独立アダプターの経路であり、planHash、内部 Assets / GUID の解析・競合検査、依存解決、バックアップ、所有台帳、実ファイルとの照合、DB 確定・復旧の完成を意味しない。Unity の callback は一時入力の削除判定に使うが、本体のインストール成功やロールバックの保証として扱わない。
+上記は2026-11-06 時点の独立 ZIP アダプター API。2026-11-17 に、本体は別途、計画・内部 Assets / GUID 解析・競合検査・依存・バックアップ・所有台帳・実ファイル照合・DB 確定・復旧を持つ適用 service へ接続した。独立 API の callback による一時入力削除と、本体の成功確定を区別する。[現在の適用機能](unity-installation.md) を参照する。
 
 ## ローカル検証
 
@@ -36,4 +36,4 @@ flowchart TD
 - TypeScript 型チェックと Vite のフロントビルド成功。pnpm 自体の署名検証がレジストリ通信で失敗したため、導入済み依存の同等 CLI を直接実行した。
 - 最終の `cargo test --workspace --offline --quiet` は67件成功。OS の既定リンク受信先を書き換える既存の実機テスト1件は、従来どおり明示実行用として除外した。`cargo fmt --all -- --check` と `git diff --check` も成功。
 
-Unity Editor による実インポートと削除の確認、Windows / Linux、GitHub Actions での実行結果は未確認。レビュー DB・承認履歴・Figma・既存の `dist/omnooth` は変更していない。
+この2026-11-06 の検証では Unity Editor の実インポート・削除は未確認だった。2026-11-17 に小さなテキスト fixture の実 ImportPackage を確認した。Windows / Linux と GitHub Actions は未実行。レビュー DB・承認履歴・Figma・既存の `dist/omnooth` は変更していない。

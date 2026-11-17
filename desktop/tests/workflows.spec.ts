@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import type { DeepLinkStatus } from '../src/contracts';
+import type { DeepLinkStatus, InstallationState } from '../src/contracts';
 
 const pageErrors = new WeakMap<Page, string[]>();
 test.beforeEach(({ page }) => {
@@ -40,6 +40,9 @@ async function installTransportFixture(page: Page, coldReceipt = false, initialI
       reportedErrors: [] as Array<{ operation: string; message: string }>,
       getSnapshotFailures: 0,
       inspectFailures: 0,
+      installation: { packages: [], jobs: [] } as InstallationState,
+      planInputs: [] as any[], installInputs: [] as any[], recoveryModes: [] as string[],
+      installationStatus: 'succeeded', installationHold: false, installFailure: '', recoveryConflicts: [] as string[],
       holdInspection: false,
       releaseInspection: null as (() => void) | null,
       logs: {
@@ -93,6 +96,36 @@ async function installTransportFixture(page: Page, coldReceipt = false, initialI
               throw new Error('SNAPSHOT_TEMPORARY_FAILURE');
             }
             return structuredClone(state.snapshot);
+          }
+          if (type === 'getInstallations') return structuredClone(state.installation);
+          if (type === 'setupUnityAdapter') return;
+          if (type === 'buildInstallPlan') {
+            state.planInputs.push(structuredClone(input));
+            return { id: 'plan-a', projectId: input.projectId, baseStateHash: 'base-hash', planHash: 'confirmed-plan-hash', selections: input.selections,
+              operations: [{ packageId: 'package-a', title: 'Test distribution', kind: input.removePackageIds.length ? 'remove' : 'add', fromVersionId: null, toVersionId: 'version-a' }],
+              assetManifest: [{ sourceFileId: 'file-a', packageId: 'package-a', versionId: 'version-a', relativePath: 'Assets/Test.prefab', assetGuid: 'a'.repeat(32), contentHash: 'b'.repeat(64), owned: true }],
+              removedPaths: input.removePackageIds.length ? ['Assets/Test.prefab'] : [], importOrder: input.selections.flatMap((s: any) => s.fileIds.map((id: string) => id === 'file-a' ? 'Avatar.unitypackage' : 'Quest.unitypackage')), requiredBytes: 1024,
+            };
+          }
+          if (type === 'installItem') {
+            state.installInputs.push(structuredClone(input));
+            if (state.installFailure) throw new Error(state.installFailure);
+            const job = { id: 'installation-a', projectId: input.projectId, status: 'waitingForUnity' as const, errorCode: null, createdAt: '2026-11-17T00:00:00Z' };
+            state.installation.jobs = [job]; return structuredClone(job);
+          }
+          if (type === 'pollInstallation') {
+            const job = state.installation.jobs[0];
+            if (!state.installationHold) {
+              job.status = state.installationStatus as typeof job.status;
+              job.errorCode = job.status === 'recovering' ? 'IMPORT_FAILED' : null;
+              if (job.status === 'succeeded') state.installation.packages = [{ packageId: 'package-a', title: 'Test distribution', versionId: 'version-a', versionLabel: '2026-10-27@aaaaaaaa', fileIds: ['file-a'] }];
+            }
+            return structuredClone(job);
+          }
+          if (type === 'recoverInstallation') {
+            state.recoveryModes.push(input.mode);
+            if (input.mode === 'restore' && !state.recoveryConflicts.length) state.installation.jobs[0].status = 'restored';
+            return { restoredPaths: [], conflicts: state.recoveryConflicts, requiresManualAction: state.recoveryConflicts.length > 0 };
           }
           if (type === 'updateSettings') { state.snapshot.settings = input.settings; return input.settings; }
           if (type === 'inspectArchive') {
@@ -519,3 +552,73 @@ for (const width of [1280, 1440, 1920]) {
     await page.screenshot({ path: test.info().outputPath(`projects-${width}.png`) });
   });
 }
+
+test('Unity apply reviews explicit order and confirms a plan before committing', async ({ page }) => {
+  await installTransportFixture(page); await page.goto('/');
+  await page.locator('.project-card').getByRole('button', { name: '選択する', exact: true }).click();
+  await page.getByRole('button', { name: 'ライブラリ', exact: true }).click();
+  await page.getByRole('button', { name: /Test distribution/ }).click();
+  const apply = page.getByRole('button', { name: '適用内容を確認', exact: true });
+  await expect(apply).toBeDisabled();
+  await page.locator('.unity-file input').nth(1).check(); await page.locator('.unity-file input').nth(0).check();
+  await apply.click();
+  const dialog = page.getByRole('dialog', { name: 'Unity への適用', exact: true });
+  await expect(dialog.getByRole('heading', { name: '適用内容', exact: true })).toBeVisible();
+  await expect(dialog.locator('ol li').first()).toContainText('Quest.unitypackage');
+  expect(await page.evaluate(() => (window as any).__workflowFixture.installInputs)).toEqual([]);
+  expect(await page.evaluate(() => (window as any).__workflowFixture.planInputs[0].selections)).toEqual([{ versionId: 'version-a', fileIds: ['file-b', 'file-a'] }]);
+  await dialog.getByRole('button', { name: '確認した内容を適用', exact: true }).click();
+  await expect(dialog.getByText('適用完了', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('2026-10-27@aaaaaaaa', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__workflowFixture.installInputs[0])).toMatchObject({ projectId: 'project-a', planId: 'plan-a', planHash: 'confirmed-plan-hash' });
+  await dialog.locator('footer').getByRole('button', { name: '閉じる', exact: true }).click();
+  await page.getByRole('button', { name: 'プロジェクト', exact: true }).click();
+  await page.getByRole('button', { name: 'Unity への適用を管理', exact: true }).click();
+  await dialog.getByRole('button', { name: '削除内容を確認', exact: true }).click();
+  await expect(dialog.getByText('削除', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__workflowFixture.planInputs.at(-1))).toMatchObject({ selections: [], removePackageIds: ['package-a'] });
+});
+
+test('Unity unavailability explains setup and keeps the reviewed plan retryable', async ({ page }) => {
+  await installTransportFixture(page); await page.goto('/');
+  await page.evaluate(() => { (window as any).__workflowFixture.installFailure = 'UNITY_UNAVAILABLE'; });
+  await page.locator('.project-card').getByRole('button', { name: '選択する', exact: true }).click();
+  await page.getByRole('button', { name: 'ライブラリ', exact: true }).click();
+  await page.getByRole('button', { name: /Test distribution/ }).click(); await page.locator('.unity-file input').first().check();
+  await page.getByRole('button', { name: '適用内容を確認', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Unity への適用', exact: true });
+  await dialog.getByRole('button', { name: '確認した内容を適用', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('Unity アダプターが応答していません');
+  await expect(dialog.getByText('適用完了', { exact: true })).toHaveCount(0);
+  await page.evaluate(() => { (window as any).__workflowFixture.installFailure = 'ASSET_PATH_CONFLICT: Assets/Existing.prefab'; });
+  await dialog.getByRole('button', { name: '確認した内容を適用', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('Assets/Existing.prefab');
+  await dialog.getByRole('button', { name: 'Unity アダプターを導入', exact: true }).click();
+  await expect(dialog.getByRole('status')).toContainText('アダプターを導入しました');
+  await page.evaluate(() => { (window as any).__workflowFixture.installFailure = ''; });
+  await dialog.getByRole('button', { name: '確認した内容を適用', exact: true }).click();
+  await expect(dialog.getByText('適用完了', { exact: true })).toBeVisible();
+  const inputs = await page.evaluate(() => (window as any).__workflowFixture.installInputs);
+  expect(inputs[0].idempotencyKey).toBe(inputs[1].idempotencyKey);
+});
+
+test('Unity jobs resume inspection and protect user edits during recovery', async ({ page }) => {
+  await installTransportFixture(page); await page.goto('/');
+  await page.evaluate(() => {
+    const fixture = (window as any).__workflowFixture;
+    fixture.installation.jobs = [{ id: 'interrupted-job', projectId: 'project-a', status: 'waitingForUnity', errorCode: null, createdAt: '2026-11-17T00:00:00Z' }];
+    fixture.installationStatus = 'recovering'; fixture.recoveryConflicts = ['Assets/UserEdited.prefab'];
+  });
+  await page.locator('.project-card').getByRole('button', { name: '選択する', exact: true }).click();
+  await page.getByRole('button', { name: 'Unity への適用を管理', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Unity への適用', exact: true });
+  await expect(dialog.getByText('適用が完了しませんでした。復旧内容を確認してください。')).toBeVisible();
+  await dialog.getByRole('button', { name: '復旧内容を確認', exact: true }).click();
+  await expect(dialog.getByText('Assets/UserEdited.prefab', { exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: '適用前のファイルへ復旧', exact: true }).click();
+  await expect(dialog.getByText('変更されたファイルがあります。内容を確認し、手動で対応してください。')).toBeVisible();
+  await page.evaluate(() => { (window as any).__workflowFixture.recoveryConflicts = []; });
+  await dialog.getByRole('button', { name: '適用前のファイルへ復旧', exact: true }).click();
+  await expect(dialog.getByRole('status')).toContainText('適用前のファイルへ復旧しました。');
+  expect(await page.evaluate(() => (window as any).__workflowFixture.planInputs)).toEqual([]);
+});

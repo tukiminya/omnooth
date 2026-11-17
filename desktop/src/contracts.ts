@@ -93,3 +93,40 @@ export interface LogSnapshot {
     correlationId: string | null;
   }>;
 }
+
+export interface InstallSelection {
+  versionId: string;
+  fileIds: string[];
+}
+
+export interface InstallPlan {
+  id: string;
+  projectId: string;
+  baseStateHash: string;
+  planHash: string;
+  selections: InstallSelection[];
+  operations: Array<{ packageId: string; title: string; kind: 'add' | 'update' | 'reselect' | 'remove'; fromVersionId: string | null; toVersionId: string | null }>;
+  assetManifest: Array<{ sourceFileId: string; packageId: string; versionId: string; relativePath: string; assetGuid: string; contentHash: string | null; owned: boolean }>;
+  removedPaths: string[];
+  importOrder: string[];
+  requiredBytes: number;
+}
+
+export interface InstallationJob {
+  id: string;
+  projectId: string;
+  status: 'preparing' | 'waitingForUnity' | 'recovering' | 'succeeded' | 'restored';
+  errorCode: string | null;
+  createdAt: string;
+}
+
+export interface InstallationState {
+  packages: Array<{ packageId: string; title: string; versionId: string; versionLabel: string; fileIds: string[] }>;
+  jobs: InstallationJob[];
+}
+
+export interface RecoveryReport {
+  restoredPaths: string[];
+  conflicts: string[];
+  requiresManualAction: boolean;
+}

@@ -74,7 +74,6 @@ test('accepts the five installers and ignores the two known macOS app artifacts'
       'omnooth-linux-x64-1.2.3.AppImage',
       'omnooth-linux-x64-1.2.3.deb',
       'omnooth-macos-arm64-1.2.3.dmg',
-      'omnooth-macos-x64-1.2.3.dmg',
       'omnooth-windows-x64-1.2.3.exe',
     ].sort(),
   );

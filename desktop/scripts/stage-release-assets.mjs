@@ -29,7 +29,7 @@ const expected = new Map([
   ['linux-x64-deb', { asset: 'linux-x64', extension: '.deb' }],
   ['linux-x64-appimage', { asset: 'linux-x64', extension: '.AppImage' }],
 ]);
-const ignoredMacAppArtifacts = new Set(['macos-arm64-app', 'macos-x64-app']);
+const ignoredMacAppArtifacts = new Set(['macos-arm64-app']);
 
 function filesUnder(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {

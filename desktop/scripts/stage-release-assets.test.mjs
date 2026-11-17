@@ -18,7 +18,6 @@ const stageScript = path.join(repoRoot, 'desktop/scripts/stage-release-assets.mj
 const fullSha = 'a'.repeat(40);
 const installers = [
   ['macos-arm64-dmg', 'Omnooth.dmg'],
-  ['macos-x64-dmg', 'Omnooth.dmg'],
   ['windows-x64-nsis', 'Omnooth-setup.exe'],
   ['linux-x64-deb', 'omnooth.deb'],
   ['linux-x64-appimage', 'omnooth.AppImage'],

@@ -138,8 +138,8 @@ jobs:
           RELEASE_NAME: ${{ steps.release.outputs.release_name }}
         run: |
           mapfile -d '' assets < <(find "$RUNNER_TEMP/omnooth-release-assets" -maxdepth 1 -type f -print0 | sort -z)
-          if [ "${#assets[@]}" -ne 5 ]; then
-            echo "Expected five installer assets, found ${#assets[@]}." >&2
+          if [ "${#assets[@]}" -ne 4 ]; then
+            echo "Expected four installer assets, found ${#assets[@]}." >&2
             exit 1
           fi
 

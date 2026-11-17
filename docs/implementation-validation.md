@@ -8,10 +8,10 @@
 - 汎用アイコンを `lucide-react` に移し、以前の汎用 SVG を削除した。残る画面内の画像要素は独自ワードマークだけ。1280 / 1440 / 1920px の画面キャプチャで欠落・配置崩れがないことを確認し、既存 Playwright 11件が成功した。
 - TypeScript / Vite、`cargo fmt --all --check`、`cargo test --offline --workspace` が成功。Rust は core 26件、本体3件、Unity 3件。OS の既定ハンドラーを変更する1件は通常どおり実行対象外とした。
 - CI 用設定をマージしたローカルの macOS デバッグ `.app` ビルドが成功した。`codesign --verify --deep --strict` が成功し、Info.plist の ID は `dev.tuki.omnooth`。今回は ad-hoc 署名で、notarization は行っていない。
-- GitHub Actions に Windows x64 NSIS、macOS Apple Silicon、Linux x64 DEB / AppImage と、全件成功後の Release 下書き作成を追加した。`actionlint` と Node の成果物検証テスト4件が成功。Tauri Action が追加で出力する macOS `.app` を除外し、5インストーラーを揃えてから添付する。欠落・拡張子不一致・未知の成果物を拒否するケースも確認した。
+- GitHub Actions に Windows x64 NSIS、macOS Apple Silicon、Linux x64 DEB / AppImage と、全件成功後の Release 下書き作成を追加した。`actionlint` と Node の成果物検証テスト4件が成功。Tauri Action が追加で出力する macOS `.app` を除外してから添付する。macOS x64 のサポート廃止後は4インストーラーを必須とする。欠落・拡張子不一致・未知の成果物を拒否するケースも確認した。
 - Windows でディレクトリを `std::fs::File` で開いて同期しないよう Unity アダプターを修正した。ファイル本体の同期は各 OS で行い、ディレクトリの同期は Unix で行う。
 
-GitHub Actions はまだ実行していない。Windows / Linux / macOS Intel のビルド成功や、各 OS でのインストール・起動を確認したという意味ではない。今回のローカルビルドは `.app` までで、DMG 自体の生成検証も CI 実行後に確認する。[配布手順と制約](releases.md) に公開までの流れを記載した。保護対象3ファイルの SHA-256 は末尾の記録から変わっていない。
+GitHub Actions はまだ実行していない。Windows / Linux のビルド成功や、各 OS でのインストール・起動を確認したという意味ではない。今回のローカルビルドは `.app` までで、DMG 自体の生成検証も CI 実行後に確認する。[配布手順と制約](releases.md) に公開までの流れを記載した。保護対象3ファイルの SHA-256 は末尾の記録から変わっていない。
 
 ## 2026-10-27：ID・受信設定・画面修正
 

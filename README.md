@@ -17,7 +17,7 @@
 - application ID は `dev.tuki.omnooth`。BOOTH Deep Link を受信し、重複をまとめる永続 FIFO でダウンロード・メタデータ取得・ライブラリ登録する処理を追加した。ライブラリ保存先と展開設定は受信時に固定する。署名 URL はメモリーだけに保持し、再起動時の未完了ジョブは新しいリンクを待つ。2026-10-28 に Firefox からエクの約1.19 GBの実ファイルを受信し、原本・商品・版の登録と、再受信時の重複防止を確認した。[確認範囲と制約](docs/booth-import-validation.md) を参照する。
 - 一般／バージョン履歴は明示的なタブで切り替える。連携専用画面は現時点では置かず、マニュアルは `https://omnooth.tuki.dev/docs` を開く。
 - アプリアイコンは指定された Figma の `127:1137` を同梱し、配布用 PNG / ICO / ICNS に反映した。画面内の汎用アイコンは `lucide-react` を使い、Figma から書き出した汎用 SVG は使わない。
-- `main` への push で Windows / macOS（Apple Silicon・Intel）/ Linux のインストーラーをビルドし、全件成功後に GitHub Release の下書きを作る。[配布手順と制約](docs/releases.md) を参照する。
+- `main` への push で Windows / macOS（Apple Silicon）/ Linux のインストーラーをビルドし、全件成功後に GitHub Release の下書きを作る。[配布手順と制約](docs/releases.md) を参照する。
 
 現行の設計カタログは `2026-10-27.2`。削除した設計項目は `archivedSpecs` に本文を持たない履歴用レコードだけを残している。SQLite にある過去の発言・承認を消さない。通常の承認は利用者が行う。2026-10-27 の明示的なオートレビュー依頼では、対象と根拠を記録したうえで委任された項目を承認する。以後の自動承認を包括的に許可するものではない。
 

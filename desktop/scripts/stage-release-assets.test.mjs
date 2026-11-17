@@ -23,7 +23,7 @@ const installers = [
   ['linux-x64-appimage', 'omnooth.AppImage'],
 ];
 
-function makeFixture({ includeApps = false, omit = null, overrideFile = null, extra = null } = {}) {
+function makeFixture({ includeApp = false, omit = null, overrideFile = null, extra = null } = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'omnooth-release-assets-'));
   const artifactRoot = path.join(root, 'artifacts');
   const outputDir = path.join(root, 'output');
@@ -42,12 +42,10 @@ function makeFixture({ includeApps = false, omit = null, overrideFile = null, ex
     writeFileSync(path.join(directory, name), 'fixture bundle');
   }
 
-  if (includeApps) {
-    for (const architecture of ['arm64', 'x64']) {
-      const app = path.join(artifactRoot, `omnooth-${fullSha}-macos-${architecture}-app`);
-      mkdirSync(path.join(app, 'Omnooth.app', 'Contents', 'MacOS'), { recursive: true });
-      writeFileSync(path.join(app, 'Omnooth.app', 'Contents', 'MacOS', 'omnooth'), 'fixture app');
-    }
+  if (includeApp) {
+    const app = path.join(artifactRoot, `omnooth-${fullSha}-macos-arm64-app`);
+    mkdirSync(path.join(app, 'Omnooth.app', 'Contents', 'MacOS'), { recursive: true });
+    writeFileSync(path.join(app, 'Omnooth.app', 'Contents', 'MacOS', 'omnooth'), 'fixture app');
   }
 
   if (extra) mkdirSync(path.join(artifactRoot, `omnooth-${fullSha}-${extra}`));
@@ -62,8 +60,8 @@ function stage(fixture) {
   });
 }
 
-test('accepts the five installers and ignores the two known macOS app artifacts', (t) => {
-  const fixture = makeFixture({ includeApps: true });
+test('accepts the four installers and ignores the known macOS arm64 app artifact', (t) => {
+  const fixture = makeFixture({ includeApp: true });
   t.after(() => rmSync(fixture.root, { recursive: true, force: true }));
 
   const result = stage(fixture);
@@ -100,7 +98,7 @@ test('rejects an installer artifact with the wrong extension', (t) => {
   assert.match(result.stderr, /Expected one \.exe bundle in omnooth-.*windows-x64-nsis/);
 });
 
-test('rejects an unknown artifact even when all five installers are present', (t) => {
+test('rejects an unknown artifact even when all four installers are present', (t) => {
   const fixture = makeFixture({ extra: 'macos-arm64-pkg' });
   t.after(() => rmSync(fixture.root, { recursive: true, force: true }));
 

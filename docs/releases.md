@@ -14,11 +14,11 @@ Concurrency is keyed by both branch and commit, so a newer merge does not replac
 | Windows Server 2025 x64 | `x86_64-pc-windows-msvc` | NSIS `.exe` |
 | Ubuntu 26.04 x64 | `x86_64-unknown-linux-gnu` | `.deb` and AppImage |
 
-Ubuntu 26.04 supplies the WebKitGTK 4.1 build dependencies and acts as the Linux compatibility baseline. The macOS Intel runner label is `macos-15-intel`; confirm GitHub's current runner labels when updating this workflow.
+Ubuntu 26.04 supplies the WebKitGTK 4.1 build dependencies and acts as the Linux compatibility baseline.
 
 ## Draft release flow
 
-Each build job has read-only repository permissions and uploads its bundles as workflow artifacts. macOS builds include both a DMG installer and the `.app` bundle; the release staging step accepts the two known `.app` artifacts but excludes them from distribution. The release job has `contents: write` and runs only after every matrix build succeeds. It validates that all five expected installers are present and rejects unknown artifacts, then creates or refreshes a draft release named `omnooth <version> (main <short SHA>)` with the stable tag `main-<full commit SHA>`.
+Each build job has read-only repository permissions and uploads its bundles as workflow artifacts. The macOS build includes both a DMG installer and the `.app` bundle; the release staging step accepts the known arm64 `.app` artifact but excludes it from distribution. The release job has `contents: write` and runs only after every matrix build succeeds. It validates that all four expected installers are present and rejects unknown artifacts, then creates or refreshes a draft release named `omnooth <version> (main <short SHA>)` with the stable tag `main-<full commit SHA>`.
 
 Rerunning a workflow for the same commit reuses the same draft and replaces same-named assets. If that tag is already attached to a published release, the workflow stops without changing it. The workflow does not publish the draft; review and publish it manually on GitHub after checking the assets.
 

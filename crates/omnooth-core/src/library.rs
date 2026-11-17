@@ -82,6 +82,7 @@ impl Service {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter()
+            .filter(|(id, _)| self.require_item_visible(id).is_ok())
             .map(|(id, title)| load_item(&conn, id, title))
             .collect()
     }
@@ -91,33 +92,58 @@ fn search_sql(query: &str) -> CoreResult<(String, Vec<String>)> {
     if query.len() > 4096 {
         return Err(CoreError::Invalid("INVALID_FILTER"));
     }
+    enum Token {
+        Term(String, bool),
+        And,
+    }
     let mut tokens = Vec::new();
     let mut word = String::new();
     let mut quoted = false;
+    let mut started = false;
+    let mut literal = false;
     let mut chars = query.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
-            '"' => quoted = !quoted,
+            '"' => {
+                if !started {
+                    literal = true;
+                }
+                quoted = !quoted;
+                started = true;
+            }
             '&' if !quoted && chars.peek() == Some(&'&') => {
                 chars.next();
-                if !word.is_empty() {
-                    tokens.push(std::mem::take(&mut word));
+                if started {
+                    if word.is_empty() {
+                        return Err(CoreError::Invalid("INVALID_FILTER"));
+                    }
+                    tokens.push(Token::Term(std::mem::take(&mut word), literal));
                 }
-                tokens.push("&&".into());
+                tokens.push(Token::And);
+                started = false;
+                literal = false;
             }
             c if c.is_whitespace() && !quoted => {
-                if !word.is_empty() {
-                    tokens.push(std::mem::take(&mut word));
+                if started {
+                    if word.is_empty() {
+                        return Err(CoreError::Invalid("INVALID_FILTER"));
+                    }
+                    tokens.push(Token::Term(std::mem::take(&mut word), literal));
                 }
+                started = false;
+                literal = false;
             }
-            _ => word.push(c),
+            _ => {
+                word.push(c);
+                started = true;
+            }
         }
     }
-    if quoted {
+    if quoted || (started && word.is_empty()) {
         return Err(CoreError::Invalid("INVALID_FILTER"));
     }
-    if !word.is_empty() {
-        tokens.push(word);
+    if started {
+        tokens.push(Token::Term(word, literal));
     }
     if tokens.is_empty() {
         return Ok(("1".into(), vec![]));
@@ -127,13 +153,16 @@ fn search_sql(query: &str) -> CoreResult<(String, Vec<String>)> {
     let mut values = Vec::new();
     let mut and = false;
     for token in tokens {
-        if token == "&&" {
+        if matches!(token, Token::And) {
             if group.is_empty() || and {
                 return Err(CoreError::Invalid("INVALID_FILTER"));
             }
             and = true;
             continue;
         }
+        let Token::Term(token, literal) = token else {
+            unreachable!()
+        };
         if !group.is_empty() && !and {
             groups.push(format!("({})", group.join(" AND ")));
             group.clear();
@@ -149,18 +178,20 @@ fn search_sql(query: &str) -> CoreResult<(String, Vec<String>)> {
                     .replace('_', "\\_")
             )
         };
-        let clause = if let Some((field, value)) = token.split_once(':') {
+        let clause = if let Some((field, value)) = token.split_once(':').filter(|_| !literal) {
             if value.is_empty() {
                 return Err(CoreError::Invalid("INVALID_FILTER"));
             }
             match field {
                 "shop" | "category" => {
                     values.push(like(value));
-                    format!("lower(json_extract(metadata_json,'$.{field}')) LIKE ? ESCAPE '\\'")
+                    format!(
+                        "unicode_fold(json_extract(metadata_json,'$.{field}')) LIKE ? ESCAPE '\\'"
+                    )
                 }
                 "tag" => {
                     values.push(value.to_lowercase());
-                    "EXISTS(SELECT 1 FROM json_each(metadata_json,'$.tags') WHERE lower(value)=?)"
+                    "EXISTS(SELECT 1 FROM json_each(metadata_json,'$.tags') WHERE unicode_fold(value)=?)"
                         .into()
                 }
                 "is" if value == "starred" => "json_extract(metadata_json,'$.isStarred')=1".into(),
@@ -173,7 +204,7 @@ fn search_sql(query: &str) -> CoreResult<(String, Vec<String>)> {
         } else {
             values.push(like(&token));
             values.push(like(&token));
-            "(lower(title) LIKE ? ESCAPE '\\' OR EXISTS(SELECT 1 FROM package_versions WHERE package_id=packages.id AND lower(original_filename) LIKE ? ESCAPE '\\'))".into()
+            "(unicode_fold(title) LIKE ? ESCAPE '\\' OR EXISTS(SELECT 1 FROM package_versions WHERE package_id=packages.id AND unicode_fold(original_filename) LIKE ? ESCAPE '\\'))".into()
         };
         group.push(clause);
     }
@@ -235,9 +266,31 @@ mod tests {
             "unknown:x",
             "age:other",
             "\"unfinished",
+            "\"\"",
+            "hair && \"\"",
         ] {
             assert!(service.search_items(input).is_err(), "{input}");
         }
+        let details = ItemDetails {
+            shop: "Étoile shop".into(),
+            category: "衣装".into(),
+            tags: vec!["黒".into()],
+            age_rating: "r18".into(),
+            is_starred: true,
+            ..Default::default()
+        };
+        service.update_item("d", "Étoile &&", details).unwrap();
+        assert_eq!(
+            service
+                .search_items(
+                    "shop:\"étoile shop\" && category:衣装 && tag:黒 && age:r18 && is:starred"
+                )
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(service.search_items("\"&&\"").unwrap().len(), 1);
+        assert_eq!(service.search_items("étoile").unwrap().len(), 1);
         assert_eq!(release_notes("説明だけ"), None);
         assert_eq!(
             release_notes("説明\n【更新履歴】\n2026-11-18 修正\n## License"),

@@ -105,10 +105,9 @@ pub type CoreResult<T> = Result<T, CoreError>;
 
 pub fn resolve_app_locale(saved: Option<&str>, os_locales: &[String]) -> &'static str {
     fn supported(value: &str) -> Option<&'static str> {
-        if !value
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        {
+        if value.split(['-', '_']).any(|part| {
+            part.is_empty() || part.len() > 8 || !part.chars().all(|c| c.is_ascii_alphanumeric())
+        }) {
             return None;
         }
         match value
@@ -521,6 +520,18 @@ impl Service {
         let conn = Connection::open(&self.db_path)?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        conn.create_scalar_function(
+            "unicode_fold",
+            1,
+            rusqlite::functions::FunctionFlags::SQLITE_UTF8
+                | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+            |context| {
+                Ok(context
+                    .get::<Option<String>>(0)?
+                    .unwrap_or_default()
+                    .to_lowercase())
+            },
+        )?;
         Ok(conn)
     }
 
@@ -548,7 +559,9 @@ impl Service {
             .collect::<Result<Vec<_>, _>>()?;
         let mut items = Vec::with_capacity(rows.len());
         for (id, title) in rows {
-            items.push(load_item(&conn, id, title)?);
+            if self.require_item_visible(&id).is_ok() {
+                items.push(load_item(&conn, id, title)?);
+            }
         }
         Ok(AppSnapshot {
             projects,
@@ -844,7 +857,6 @@ impl Service {
         } else {
             None
         };
-        let item: LibraryItem;
         let tx = conn.unchecked_transaction()?;
         if new_package {
             tx.execute(
@@ -870,7 +882,7 @@ impl Service {
                 Err(error) => return Err(error),
             }
         }
-        item = load_item(&conn, package_id, title)?;
+        let item = load_item(&conn, package_id, title)?;
         Ok(ImportResult {
             item,
             reused: false,

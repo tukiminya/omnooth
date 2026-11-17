@@ -225,7 +225,7 @@ fn prune_old_sessions(directory: &Path, keep: usize) -> Result<(), ActivityLogEr
             sessions.push((session_id.to_owned(), modified));
         }
     }
-    sessions.sort_by(|left, right| right.1.cmp(&left.1));
+    sessions.sort_by_key(|value| std::cmp::Reverse(value.1));
     let retained: Vec<String> = sessions
         .iter()
         .take(keep)

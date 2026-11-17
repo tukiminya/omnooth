@@ -57,13 +57,18 @@ async function installTransportFixture(page: Page, coldReceipt = false, initialI
       logsFail: false,
     };
     const callbacks = new Map<number, (event: unknown) => void>();
-    const eventHandlers = new Map<number, number>();
+    const eventHandlers = new Map<number, { event: string; handler: number }>();
     let callbackId = 0;
     let listenerId = 0;
     Object.assign(state, {
       emitDeepLink(status: typeof state.deepLink) {
         state.deepLink = status;
-        for (const [id, handler] of eventHandlers) callbacks.get(handler)?.({ event: 'deep-link-status-changed', id, payload: status });
+        for (const [id, listener] of eventHandlers) if (listener.event === 'deep-link-status-changed') callbacks.get(listener.handler)?.({ event: 'deep-link-status-changed', id, payload: status });
+      },
+      emitVisibilityLocked() {
+        (state.snapshot as any).privacy = { available: true, noticeAcknowledged: true, unlocked: false, expiresAt: null };
+        state.snapshot.items = state.snapshot.items.filter(item => !(item as any).isHidden);
+        for (const [id, listener] of eventHandlers) if (listener.event === 'visibility-locked') callbacks.get(listener.handler)?.({ event: 'visibility-locked', id, payload: null });
       },
       listenerCount: () => eventHandlers.size,
     });
@@ -74,8 +79,8 @@ async function installTransportFixture(page: Page, coldReceipt = false, initialI
       __TAURI_INTERNALS__: {
         transformCallback(callback: (event: unknown) => void) { const id = ++callbackId; callbacks.set(id, callback); return id; },
         unregisterCallback(id: number) { callbacks.delete(id); },
-        async invoke(name: string, args: { eventId?: number; handler?: number; operation?: string; message?: string; options?: { multiple?: boolean }; command?: { type: string; input?: any } }) {
-          if (name === 'plugin:event|listen') { const id = ++listenerId; eventHandlers.set(id, args.handler!); return id; }
+        async invoke(name: string, args: { event?: string; eventId?: number; handler?: number; operation?: string; message?: string; options?: { multiple?: boolean }; command?: { type: string; input?: any } }) {
+          if (name === 'plugin:event|listen') { const id = ++listenerId; eventHandlers.set(id, { event: args.event!, handler: args.handler! }); return id; }
           if (name === 'plugin:event|unlisten') { eventHandlers.delete(args.eventId!); return; }
           if (name === 'dispatch' && args.command?.type === 'searchItems') return structuredClone(state.snapshot.items.filter(item => item.title.toLowerCase().includes(args.command!.input.query.toLowerCase())));
           if (name === 'get_deep_link_status') return structuredClone(state.deepLink);
@@ -716,4 +721,21 @@ test('cleanup requires a separate review and confirmation after saving retention
   expect(await page.evaluate(()=>(window as any).__workflowFixture.commands)).not.toContain('executeCleanup');
   await dialog.getByRole('button',{name:'確認した対象を整理する'}).click();await expect(dialog).toContainText('整理が完了しました。');
   expect(await page.evaluate(()=>(window as any).__workflowFixture.snapshot.items[0].versions.length)).toBe(1);
+});
+
+
+test('locking clears cached hidden views and restores the remaining public library', async ({ page }) => {
+  await installTransportFixture(page);
+  await page.addInitScript(() => {
+    const state=(window as any).__workflowFixture;
+    state.snapshot.privacy={available:true,noticeAcknowledged:true,unlocked:true,expiresAt:new Date(Date.now()+300000).toISOString()};
+    state.snapshot.items[0].isHidden=true;
+    state.snapshot.items.push({...state.snapshot.items[0],id:'public-item',title:'Public item',isHidden:false});
+  });
+  await page.goto('/');await page.getByRole('button',{name:'ライブラリ',exact:true}).click();
+  await expect(page.getByRole('button',{name:/Test distribution/})).toBeVisible();
+  await page.evaluate(()=>(window as any).__workflowFixture.emitVisibilityLocked());
+  await expect(page.getByRole('button',{name:/Test distribution/})).not.toBeVisible();
+  await expect(page.getByRole('button',{name:/Public item/})).toBeVisible();
+  await expect(page.getByRole('button',{name:'非表示を解除',exact:true})).toBeVisible();
 });

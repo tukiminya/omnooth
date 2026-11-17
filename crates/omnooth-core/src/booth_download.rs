@@ -143,7 +143,7 @@ where
             return Err(error);
         }
     };
-    if let Err(_) = fs::rename(&part_path, &final_path) {
+    if fs::rename(&part_path, &final_path).is_err() {
         let _ = fs::remove_file(&part_path);
         return Err(CoreError::Download("DOWNLOAD_IO_ERROR"));
     }
@@ -315,10 +315,10 @@ fn adapt_metadata(
             .take(100)
             .map(|s| s.chars().take(128).collect())
             .collect(),
-        age_rating: if data.get("is_adult").and_then(|v| v.as_bool()) == Some(true) {
-            "r18"
-        } else {
-            "all"
+        age_rating: match data.get("is_adult").and_then(|v| v.as_bool()) {
+            Some(true) => "r18",
+            Some(false) => "all",
+            None => "unknown",
         }
         .into(),
         ..Default::default()

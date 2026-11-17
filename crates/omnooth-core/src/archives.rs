@@ -349,7 +349,9 @@ fn extract_rar(path: &Path, output: &mut Output<'_>, password: Option<&str>) -> 
     let mut options = rar::OpenArchiveDataEx::new(wide.as_ptr(), rar::RAR_OM_EXTRACT);
     options.callback = Some(callback);
     options.user_data = (&mut stream as *mut Stream) as rar::LPARAM;
-    let handle = unsafe { rar::RAROpenArchiveEx(&mut options) };
+    // UnRAR writes these records despite the bindings declaring const pointers.
+    let options_pointer = &mut options as *mut rar::OpenArchiveDataEx;
+    let handle = unsafe { rar::RAROpenArchiveEx(options_pointer) };
     if handle.is_null() {
         return Err(error(options.open_result as i32, password));
     }
@@ -359,7 +361,8 @@ fn extract_rar(path: &Path, output: &mut Output<'_>, password: Option<&str>) -> 
     }
     loop {
         let mut header = rar::HeaderDataEx::default();
-        let result = unsafe { rar::RARReadHeaderEx(handle.0, &mut header) };
+        let header_pointer = &mut header as *mut rar::HeaderDataEx;
+        let result = unsafe { rar::RARReadHeaderEx(handle.0, header_pointer) };
         if result == rar::ERAR_END_ARCHIVE {
             break;
         }

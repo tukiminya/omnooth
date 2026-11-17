@@ -120,7 +120,7 @@ pub fn parse_item_import_deep_link(url: &str) -> CoreResult<ParsedItemImport> {
     }
     let booth_item_id = values
         .remove("item_id")
-        .filter(|v| is_positive_decimal(&v))
+        .filter(|v| is_positive_decimal(v))
         .ok_or(CoreError::Invalid("INVALID_DEEP_LINK"))?;
     if crate::validate_filename(&filename).is_err() || import_format(&filename).is_err() {
         return Err(CoreError::Invalid("INVALID_FILENAME"));
@@ -271,11 +271,10 @@ pub(crate) fn expiry_time(url: &Url) -> CoreResult<Option<String>> {
                     return Err(CoreError::Invalid("INVALID_DOWNLOAD_URL"));
                 }
             }
-            "X-Amz-Expires" => {
-                if expires.replace(value.into_owned()).is_some() {
-                    return Err(CoreError::Invalid("INVALID_DOWNLOAD_URL"));
-                }
+            "X-Amz-Expires" if expires.is_some() => {
+                return Err(CoreError::Invalid("INVALID_DOWNLOAD_URL"))
             }
+            "X-Amz-Expires" => expires = Some(value.into_owned()),
             _ => {}
         }
     }

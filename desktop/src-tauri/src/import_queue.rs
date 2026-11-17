@@ -697,6 +697,15 @@ fn replace_file(from: &Path, to: &Path) -> Result<(), QueueError> {
     Ok(())
 }
 
+#[cfg(not(windows))]
+fn replace_file(from: &Path, to: &Path) -> Result<(), QueueError> {
+    fs::rename(from, to)?;
+    if let Some(parent) = to.parent() {
+        File::open(parent)?.sync_all()?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1066,13 +1075,4 @@ mod tests {
         assert_eq!(error.code(), "QUEUE_STORAGE_ERROR");
         assert_eq!(fs::read(&storage).unwrap(), corrupt);
     }
-}
-
-#[cfg(not(windows))]
-fn replace_file(from: &Path, to: &Path) -> Result<(), QueueError> {
-    fs::rename(from, to)?;
-    if let Some(parent) = to.parent() {
-        File::open(parent)?.sync_all()?;
-    }
-    Ok(())
 }

@@ -143,6 +143,35 @@ impl RequestVault {
 mod tests {
     use super::*;
     #[test]
+    #[ignore = "Writes a new isolated test key to the OS credential store"]
+    fn native_credential_store_round_trip() {
+        let root =
+            std::env::temp_dir().join(format!("omnooth-native-vault-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let canonical = fs::canonicalize(&root).unwrap();
+        let result = (|| -> Result<(), &'static str> {
+            let vault = RequestVault::open(&root)?;
+            let reopened = RequestVault::open(&root)?;
+            if *vault.key != *reopened.key {
+                return Err("CREDENTIAL_KEY_MISMATCH");
+            }
+            Ok(())
+        })();
+        if let Ok(entry) = keyring::Entry::new(
+            "dev.tuki.omnooth.download-key",
+            &canonical.to_string_lossy(),
+        ) {
+            let _ = entry.delete_credential();
+        }
+        let _ = fs::remove_dir_all(root);
+        assert!(
+            result.is_ok(),
+            "Native credential store round-trip failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
     fn ciphertext_is_bound_to_job_and_key_and_rejects_tampering() {
         let root = std::env::temp_dir().join(format!("vault-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);

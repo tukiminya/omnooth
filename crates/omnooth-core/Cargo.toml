@@ -10,7 +10,7 @@ chrono = { version = "0.4.45", features = ["serde"] }
 flate2 = "1.1.9"
 fs2 = "0.4.3"
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls"] }
-rusqlite = { version = "0.38.0", features = ["backup", "bundled"] }
+rusqlite = { version = "0.38.0", features = ["backup", "bundled", "functions"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sevenz-rust2 = "0.25.0"

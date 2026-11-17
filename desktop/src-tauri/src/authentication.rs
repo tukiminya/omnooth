@@ -39,8 +39,22 @@ impl AuthenticationGateway for NativeAuthentication {
                 core::{factory, HSTRING},
                 Foundation::IAsyncOperation,
                 Security::Credentials::UI::{UserConsentVerificationResult, UserConsentVerifier},
-                Win32::System::WinRT::IUserConsentVerifierInterop,
+                Win32::System::WinRT::{
+                    IUserConsentVerifierInterop, RoInitialize, RoUninitialize,
+                    RO_INIT_MULTITHREADED,
+                },
             };
+            unsafe { RoInitialize(RO_INIT_MULTITHREADED) }
+                .map_err(|_| CoreError::Invalid("AUTH_UNAVAILABLE"))?;
+            struct Apartment;
+            impl Drop for Apartment {
+                fn drop(&mut self) {
+                    unsafe {
+                        RoUninitialize();
+                    }
+                }
+            }
+            let _apartment = Apartment;
             let window = self
                 .0
                 .get_webview_window("main")

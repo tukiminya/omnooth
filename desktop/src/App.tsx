@@ -52,6 +52,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(true);
   const lastReceiptKey = useRef<string | null>(null);
   const latestImportStateSignature = useRef(new Map<number, string>());
+  const importToastGenerations = useRef(new Map<number, number>());
   const refreshedImportJobs = useRef(new Set<number>());
   const refreshingImportJobs = useRef(new Set<number>());
   const snapshotGeneration = useRef(0);
@@ -94,7 +95,10 @@ function App() {
     }
     if (!isNewTransition) return;
     const common = { filename: status.filename, count: activeCount ?? 1 };
-    const options = { id: `booth-import-${status.jobId}`, duration: Infinity, action: undefined };
+    const generation = importToastGenerations.current.get(status.jobId) ?? 0;
+    const options = { id: `booth-import-${status.jobId}-${generation}`, duration: Infinity, action: undefined,
+      onDismiss: () => { if ((importToastGenerations.current.get(status.jobId) ?? 0) === generation) importToastGenerations.current.set(status.jobId, generation + 1); },
+    };
     const logAction = { label: t('deepLinkOpenLogs'), onClick: () => setLogsOpen(true) };
     switch (status.state) {
       case 'queued': toast.loading(t('deepLinkQueued', common), options); break;
@@ -209,7 +213,12 @@ function App() {
   useEffect(() => {
     if (!snapshot?.privacy?.available) return;
     let disposed = false; let stop: (() => void) | undefined;
-    async function refresh() { clearPrivateViews(); const next = await client.getSnapshot(); if (!disposed) setSnapshot(next); }
+    async function refresh() {
+      if (disposed) return;
+      clearPrivateViews(); const generation = snapshotGeneration.current;
+      const next = await client.getSnapshot();
+      if (generation === snapshotGeneration.current) setSnapshot(next);
+    }
     void client.onVisibilityLocked(() => { void refresh().catch(() => setSnapshot(null)); }).then(unsubscribe => { if (disposed) unsubscribe(); else stop = unsubscribe; });
     const expiry = snapshot.privacy.expiresAt ? Math.max(0, Date.parse(snapshot.privacy.expiresAt) - Date.now()) : null;
     const timer = expiry === null ? undefined : setTimeout(() => { void refresh().catch(() => setSnapshot(null)); }, expiry + 100);

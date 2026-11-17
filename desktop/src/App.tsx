@@ -7,6 +7,7 @@ import { Icon } from './Icon';
 import { LogDialog } from './LogDialog';
 import { InstallationDialog } from './InstallationDialog';
 import { AppToaster } from './AppToaster';
+import { CustomDialog } from './CustomDialog';
 import { MetadataDialog } from './MetadataDialog';
 import { ArchiveContentsList } from './ArchiveContentsList';
 import { formatBytes } from './formatBytes';
@@ -37,6 +38,7 @@ function App() {
   const [deepLinkStatus, setDeepLinkStatus] = useState<DeepLinkStatus | null>(null);
   const [deepLinkError, setDeepLinkError] = useState('');
   const [query, setQuery] = useState('');
+  const [customEditing, setCustomEditing] = useState<{ item: LibraryItem | null } | null>(null);
   const [metadataEditing, setMetadataEditing] = useState<LibraryItem | null>(null);
   const [searchResults, setSearchResults] = useState<LibraryItem[] | null>(null);
   const [searchError, setSearchError] = useState(false);
@@ -341,14 +343,15 @@ function App() {
             {activePage === 'library' && searchError && <p role="alert">{t('invalidSearch')}</p>}
             {isLoading ? <LoadingState label={t('loading')} /> : activePage === 'projects' ? <ProjectsPage projects={orderedProjects} allCount={snapshot?.projects.length ?? 0} selectedId={selectedProjectId} selectedProject={selectedProject} sort={projectSort} onSort={setProjectSort} query={query} onQuery={setQuery} onLink={linkProject} onSelect={(project) => { setSelectedProjectId(project.id); toast.info(t('projectSelected', { name: project.name })); }} busy={busy} t={t} /> : <LibraryPage items={filteredItems} selectedItem={selectedItem} selectedVersion={selectedVersion} query={query} onQuery={setQuery} onAdd={addArchives} onSelect={(item) => { setSelectedItemId(item.id); setSelectedVersionId(latestVersion(item.versions)?.id ?? null); setChosenUnityPackages([]); }} onVersion={(id) => { setSelectedVersionId(id); setChosenUnityPackages([]); }} onExtract={extractSelected} archivePreview={currentPreview} onRetryPreview={() => setArchivePreviewAttempt((value) => value + 1)} busy={busy} selectedUnityPackages={visibleSelection} onTogglePackage={togglePackage} onMovePackage={movePackage} project={selectedProject} t={t} />}
           </div>
-          {activePage === 'projects' ? <ProjectGuide t={t} project={selectedProject} onManage={() => { if (selectedProject) setInstallation({ project: selectedProject, selections: [] }); }} /> : <PackageDetails onEdit={() => { if (selectedItem) setMetadataEditing(selectedItem); }} item={selectedItem} version={selectedVersion} selectedCount={visibleSelection.length} project={selectedProject} busy={busy} onAdd={addArchives} onSettings={openSettings} onApply={() => { if (selectedProject && selectedVersion) setInstallation({ project: selectedProject, selections: [{ versionId: selectedVersion.id, fileIds: visibleSelection }] }); }} t={t} />}
+          {activePage === 'projects' ? <ProjectGuide t={t} project={selectedProject} onManage={() => { if (selectedProject) setInstallation({ project: selectedProject, selections: [] }); }} /> : <PackageDetails onCustom={() => setCustomEditing({ item: selectedItem })} onEdit={() => { if (selectedItem) setMetadataEditing(selectedItem); }} item={selectedItem} version={selectedVersion} selectedCount={visibleSelection.length} project={selectedProject} busy={busy} onAdd={addArchives} onSettings={openSettings} onApply={() => { if (selectedProject && selectedVersion) setInstallation({ project: selectedProject, selections: [{ versionId: selectedVersion.id, fileIds: visibleSelection }] }); }} t={t} />}
         </main>
       </div>
+      {customEditing && <CustomDialog items={snapshot?.items ?? []} item={customEditing.item} busy={busy} onClose={() => setCustomEditing(null)} onSave={async input => { const next = await perform(() => client.saveCustomPackage(input)); if (next) { applySnapshot(next); setCustomEditing(null); } }} t={t} />}
       {metadataEditing && <MetadataDialog item={metadataEditing} busy={busy} onClose={() => setMetadataEditing(null)} onSave={async (title, details) => { const next = await perform(() => client.updateItem(metadataEditing.id, title, details)); if (next) { applySnapshot(next); setMetadataEditing(null); } }} t={t} />}
-      {installation && <InstallationDialog project={installation.project} initialSelections={installation.selections} onClose={() => setInstallation(null)} t={t} />}
+      {installation && <InstallationDialog items={snapshot?.items ?? []} project={installation.project} initialSelections={installation.selections} onClose={() => setInstallation(null)} t={t} />}
       {logsOpen && <LogDialog getLogs={client.getLogs} onClose={() => setLogsOpen(false)} t={t} />}
       {settingsOpen && settingsDraft && <SettingsDialog draft={settingsDraft} setDraft={setSettingsDraft} versions={snapshot?.items.flatMap((item) => item.versions.map((version) => ({ itemTitle: item.title, version })) ) ?? []} tab={settingsTab} setTab={setSettingsTab} busy={busy} deepLinkStatus={deepLinkStatus} deepLinkError={deepLinkError} onRegisterDeepLink={registerDeepLink} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onChoosePath={chooseLibraryPath} t={t} />}
-      <AppToaster container={metadataEditing ? '.metadata-dialog' : installation ? '.installation-dialog' : logsOpen ? '.log-dialog' : settingsOpen ? '.settings-dialog' : null} />
+      <AppToaster container={customEditing ? '.metadata-dialog' : metadataEditing ? '.metadata-dialog' : installation ? '.installation-dialog' : logsOpen ? '.log-dialog' : settingsOpen ? '.settings-dialog' : null} />
     </div>
   );
 
@@ -396,7 +399,7 @@ function LibraryPage({ items, selectedItem, selectedVersion, query, onQuery, onA
     <div className="notice-card compact"><Icon name="warning" size={18} /><div><strong>{t('libraryBehaviorTitle')}</strong><p>{t('libraryBehavior')}</p></div></div>
     <div className="toolbar"><SearchField value={query} onChange={onQuery} placeholder={t('searchLibrary')} ariaLabel={t('searchLibrary')} /><span className="subtle">{t('itemsCount', { count: items.length })}</span></div>
     {!items.length ? <EmptyState title={t('emptyLibraryTitle')} body={t('emptyLibraryHint')} action={t('addFiles')} onAction={onAdd} disabled={busy} /> : <div className="library-layout">
-      <div className="item-list">{items.map((item) => <button key={item.id} className={`item-row ${selectedItem?.id === item.id ? 'selected' : ''}`} onClick={() => onSelect(item)} disabled={busy}><span className="file-badge">ZIP</span><span className="item-row-copy"><strong>{item.title}</strong><small>{item.versions.length} {t('versions')}</small></span><Icon name="chevron" size={12} /></button>)}</div>
+      <div className="item-list">{items.map((item) => <button key={item.id} className={`item-row ${selectedItem?.id === item.id ? 'selected' : ''}`} onClick={() => onSelect(item)} disabled={busy}><span className="file-badge">ZIP</span><span className="item-row-copy"><strong>{item.title}</strong>{item.displayParentId && <small>{items.find(parent => parent.id === item.displayParentId)?.title}</small>}<small>{item.versions.length} {t('versions')}</small></span><Icon name="chevron" size={12} /></button>)}</div>
       <div className="item-content">{selectedItem && selectedVersion ? <>
         <div className="item-titlebar"><div><h2>{selectedItem.title}</h2><p className="subtle mono">{selectedVersion.originalFilename}</p></div><label className="version-select-label"><span>{t('version')}</span><select value={selectedVersion.id} onChange={(event) => onVersion(event.target.value)} disabled={busy}>{selectedItem.versions.map((version) => <option key={version.id} value={version.id}>{version.label}</option>)}</select></label></div>
         <div className="version-summary"><span className={`status-dot ${selectedVersion.state}`} />{selectedVersion.state === 'extracted' ? t('extracted') : selectedVersion.state === 'ready' ? t('ready') : t('storedOnly')}<span className="mono">{selectedVersion.versionDate}</span><span className="mono">SHA-256 {selectedVersion.contentHash.slice(0, 8)}</span></div>
@@ -411,11 +414,13 @@ function LibraryPage({ items, selectedItem, selectedVersion, query, onQuery, onA
   </section>;
 }
 
-function PackageDetails({ onEdit, item, version, selectedCount, project, busy, onAdd, onSettings, onApply, t }: { onEdit: () => void; item: LibraryItem | null; version: LibraryVersion | null; selectedCount: number; project: Project | null; busy: boolean; onAdd: () => void; onSettings: () => void; onApply: () => void; t: (key: string, options?: Record<string, unknown>) => string }) {
+function PackageDetails({ onCustom, onEdit, item, version, selectedCount, project, busy, onAdd, onSettings, onApply, t }: { onCustom: () => void; onEdit: () => void; item: LibraryItem | null; version: LibraryVersion | null; selectedCount: number; project: Project | null; busy: boolean; onAdd: () => void; onSettings: () => void; onApply: () => void; t: (key: string, options?: Record<string, unknown>) => string }) {
   return <aside className="right-rail">
     <h2>{t('packageDetails')}</h2>
     {item && version ? <>
       <div className="rail-identity"><Icon name="disk" size={18} /><strong>{item.title}</strong></div><p className="rail-description">{t('originalFilename')}: <span className="mono">{version.originalFilename}</span></p>
+      <button className="button secondary full" onClick={onCustom} disabled={busy}>{t(item.kind === 'custom' ? 'editCustom' : 'createCustom')}</button>
+      {item.description && <p className="plain-text">{item.description}</p>}
       <button className="button secondary full" onClick={onEdit} disabled={busy}>{t('editMetadata')}</button>
       {item.details && <div className="rail-description"><p>{item.details.shop} {item.details.category} {item.details.isStarred ? '★' : ''}</p><p>{item.details.tags.join(' · ')}</p>{item.details.description && <details><summary>{t('description')}</summary><p className="plain-text">{item.details.description}</p></details>}{item.details.releaseNotes && <details><summary>{t('releaseNotes')}</summary><p>{t('extractedReleaseNotes')}</p><p className="plain-text">{item.details.releaseNotes}</p>{item.boothItemId && /^\d+$/.test(item.boothItemId) && <a href={`https://booth.pm/ja/items/${item.boothItemId}`} target="_blank" rel="noreferrer">{t('sourceProduct')}</a>}</details>}</div>}
       <hr /><div className="rail-label-row"><strong>{t('includedFiles')}</strong><span>{version.files.length}</span></div>

@@ -35,12 +35,16 @@ export interface LibraryVersion {
   originalFilename: string;
   state: 'stored' | 'extracted' | 'ready';
   files: ContentFile[];
+  requiredVersionIds?: string[];
 }
 
 export interface LibraryItem {
   id: string;
   title: string;
   boothItemId?: string | null;
+  kind?: string;
+  displayParentId?: string | null;
+  description?: string;
   details?: { description: string; shop: string; category: string; tags: string[]; ageRating: string; isStarred: boolean; releaseNotes: string | null };
   versions: LibraryVersion[];
 }
@@ -131,4 +135,13 @@ export interface RecoveryReport {
   restoredPaths: string[];
   conflicts: string[];
   requiresManualAction: boolean;
+}
+
+export interface SaveCustomInput {
+  packageId: string | null;
+  name: string;
+  description: string;
+  displayParentId: string;
+  unitypackagePaths: string[];
+  requiredVersionIds: string[];
 }

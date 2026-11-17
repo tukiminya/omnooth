@@ -536,6 +536,34 @@ impl Service {
                 hash: expected,
                 source_file_id: selection.file_ids[0].clone(),
             });
+        } else if filename == "custom.manifest.json" {
+            let extracted: String = conn.query_row(
+                "SELECT extracted_path FROM package_versions WHERE id=?1",
+                [&selection.version_id],
+                |r| r.get(0),
+            )?;
+            let extracted = PathBuf::from(extracted);
+            if fs::symlink_metadata(&extracted)?.file_type().is_symlink() {
+                return Err(CoreError::Invalid("OBJECT_STORE_CORRUPT"));
+            }
+            for id in &selection.file_ids {
+                let (relative,hash): (String,String) = conn.query_row("SELECT relative_path,content_hash FROM package_files WHERE version_id=?1 AND id=?2 AND kind='unitypackage'",params![selection.version_id,id],|r|Ok((r.get(0)?,r.get(1)?)))?;
+                let source = extracted.join(safe_member_path(&relative)?);
+                if fs::symlink_metadata(&source)?.file_type().is_symlink() {
+                    return Err(CoreError::Invalid("OBJECT_STORE_CORRUPT"));
+                }
+                let target = root.join(format!("{}.unitypackage", Uuid::new_v4()));
+                atomic_copy(&source, &target, &hash)?;
+                originals.insert(source, hash.clone());
+                result.push(StagedPackage {
+                    file: UnityImportFile {
+                        operation_id: Uuid::new_v4().to_string(),
+                        path: fs::canonicalize(target)?,
+                    },
+                    hash,
+                    source_file_id: id.clone(),
+                });
+            }
         } else {
             return Err(CoreError::Invalid("EXTRACTION_UNSUPPORTED"));
         }

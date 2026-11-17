@@ -3,13 +3,31 @@ import { toast } from 'sonner';
 import { client } from './client';
 import { Icon } from './Icon';
 import { formatBytes } from './formatBytes';
-import type { Project, InstallSelection, InstallPlan, InstallationJob, InstallationState, RecoveryReport } from './contracts';
+import type { LibraryItem, Project, InstallSelection, InstallPlan, InstallationJob, InstallationState, RecoveryReport } from './contracts';
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
 
-export function InstallationDialog({ project, initialSelections, onClose, t }: {
-  project: Project; initialSelections: InstallSelection[]; onClose: () => void; t: Translate;
+export function InstallationDialog({ items, project, initialSelections, onClose, t }: {
+  items: LibraryItem[]; project: Project; initialSelections: InstallSelection[]; onClose: () => void; t: Translate;
 }) {
+  const [dependencyContents, setDependencyContents] = useState<Record<string, import('./contracts').ContentFile[]>>({});
+  const [dependencyFiles, setDependencyFiles] = useState<Record<string, string[]>>({});
+  const versions = items.flatMap(item => item.versions.map(version => ({ ...version, title: item.title })));
+  const dependencies: typeof versions = [];
+  const visited = new Set(initialSelections.map(selection => selection.versionId));
+  function collect(id: string) { if (visited.has(id)) return; visited.add(id); const version = versions.find(version => version.id === id); if (version) { dependencies.push(version); version.requiredVersionIds?.forEach(collect); } }
+  initialSelections.forEach(selection => versions.find(version => version.id === selection.versionId)?.requiredVersionIds?.forEach(collect));
+  const dependencyKey = dependencies.map(version => version.id).join(',');
+  useEffect(() => {
+    let disposed = false;
+    for (const version of dependencies) {
+      if (version.state === 'stored' && version.originalFilename.toLowerCase().endsWith('.zip')) {
+        void client.inspectArchive(version.id).then(contents => { if (!disposed) setDependencyContents(current => ({ ...current, [version.id]: contents.entries })); }).catch(() => { if (!disposed) setError(t('archiveReadError')); });
+      }
+    }
+    return () => { disposed = true; };
+  }, [dependencyKey]);
+  const combinedSelections = [...initialSelections, ...Object.entries(dependencyFiles).filter(([, files]) => files.length).map(([versionId, fileIds]) => ({ versionId, fileIds }))];
   const dialog = useRef<HTMLDialogElement>(null);
   const [state, setState] = useState<InstallationState | null>(null);
   const [plan, setPlan] = useState<InstallPlan | null>(null);
@@ -37,7 +55,7 @@ export function InstallationDialog({ project, initialSelections, onClose, t }: {
         setState(next);
         const pending = activeJob(next);
         setJob(pending);
-        if (!pending && initialSelections.length) {
+        if (!pending && initialSelections.length && !dependencies.length) {
           const result = await client.buildInstallPlan(project.id, initialSelections);
           if (!disposed) setPlan(result);
         }
@@ -76,7 +94,7 @@ export function InstallationDialog({ project, initialSelections, onClose, t }: {
     catch (cause) { setError(installError(cause, t)); void client.reportError('unity.installation', String(cause)); }
     finally { setBusy(false); }
   }
-  async function review(selections = initialSelections, remove: string[] = []) {
+  async function review(selections = combinedSelections, remove: string[] = []) {
     await perform(async () => {
       setPlan(null); setReport(null); setJob(null);
       const next = await client.buildInstallPlan(project.id, selections, remove);
@@ -102,6 +120,7 @@ export function InstallationDialog({ project, initialSelections, onClose, t }: {
       <p><strong>{project.name}</strong> · {project.unityVersion}</p><p className="mono path">{project.path}</p>
       <p>{t('installEditorHint')}</p>
       <button className="button secondary" disabled={busy || Boolean(pending)} onClick={() => void perform(async () => { await client.setupUnityAdapter(project.id); setNotice(t('installAdapterReady')); })}>{t('setupUnityAdapter')}</button>
+      {!plan && !pending && dependencies.length > 0 && <section><h3>{t('chooseDependencyFiles')}</h3><p>{t('dependencySelectionHint')}</p>{dependencies.map(version => <fieldset key={version.id}><legend>{version.title} · {version.label}</legend>{(dependencyContents[version.id] ?? version.files).filter(file => file.kind === 'unitypackage').map(file => <label className="unity-file" key={file.id}><input type="checkbox" disabled={file.encrypted} checked={dependencyFiles[version.id]?.includes(file.id) ?? false} onChange={() => setDependencyFiles(current => ({ ...current, [version.id]: current[version.id]?.includes(file.id) ? current[version.id].filter(id => id !== file.id) : [...(current[version.id] ?? []), file.id] }))} />{file.relativePath}</label>)}</fieldset>)}</section>}
       {busy && <p role="status">{t('working')}</p>}
       {error && <p className="deep-link-error" role="alert">{error}</p>}
       {notice && <p role="status">{notice}</p>}

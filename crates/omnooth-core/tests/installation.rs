@@ -1056,3 +1056,85 @@ fn updates_cannot_rewrite_existing_shared_folder_metadata() {
         "ASSET_PATH_CONFLICT"
     );
 }
+
+#[test]
+fn custom_versions_are_immutable_and_require_explicit_dependency_files() {
+    let w = Workspace::new();
+    let base = w.import(
+        "Base.unitypackage",
+        &[("Assets/Base.txt", A, Some(b"base"))],
+    );
+    let source = w.root.join("Custom.unitypackage");
+    fs::write(
+        &source,
+        package(&[("Assets/Custom.txt", B, Some(b"custom"))]),
+    )
+    .unwrap();
+    let mut input = SaveCustomInput {
+        package_id: None,
+        name: "My custom".into(),
+        description: "Modified".into(),
+        display_parent_id: base.id.clone(),
+        unitypackage_paths: vec![source],
+        required_version_ids: vec![base.versions[0].id.clone()],
+    };
+    let custom = w.service.save_custom_package(input.clone()).unwrap();
+    assert_eq!(custom.kind, "custom");
+    assert!(w
+        .service
+        .get_installations(&w.project.id)
+        .unwrap()
+        .packages
+        .is_empty());
+    let version = &custom.versions[0];
+    assert_eq!(
+        w.service
+            .build_install_plan(BuildInstallPlanInput {
+                project_id: w.project.id.clone(),
+                selections: vec![InstallSelection {
+                    version_id: version.id.clone(),
+                    file_ids: vec![version.files[0].id.clone()]
+                }],
+                remove_package_ids: vec![]
+            })
+            .unwrap_err()
+            .code(),
+        "DEPENDENCY_SELECTION_REQUIRED"
+    );
+    let plan = w
+        .service
+        .build_install_plan(BuildInstallPlanInput {
+            project_id: w.project.id.clone(),
+            selections: vec![
+                InstallSelection {
+                    version_id: version.id.clone(),
+                    file_ids: vec![version.files[0].id.clone()],
+                },
+                InstallSelection {
+                    version_id: base.versions[0].id.clone(),
+                    file_ids: vec![base.versions[0].files[0].id.clone()],
+                },
+            ],
+            remove_package_ids: vec![],
+        })
+        .unwrap();
+    let gateway = FakeUnity::success();
+    let job = w.service.install_item(w.input(&plan), &gateway).unwrap();
+    assert_eq!(
+        w.service
+            .poll_installation(&job.id, &gateway)
+            .unwrap()
+            .status,
+        "succeeded"
+    );
+    input.package_id = Some(custom.id.clone());
+    input.unitypackage_paths.clear();
+    input.name = "Renamed".into();
+    let edited = w.service.save_custom_package(input.clone()).unwrap();
+    assert_eq!(edited.versions[0].id, version.id);
+    input.required_version_ids = vec![version.id.clone()];
+    assert_eq!(
+        w.service.save_custom_package(input).unwrap_err().code(),
+        "DEPENDENCY_VERSION_CONFLICT"
+    );
+}

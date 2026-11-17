@@ -35,6 +35,14 @@ async function getSnapshot(): Promise<AppSnapshot> {
 export const client = {
   isDesktop: desktop,
   getSnapshot,
+  async chooseCustomFiles(): Promise<string[]> {
+    requireDesktop();
+    return (await open({ multiple: true, filters: [{ name: 'Unity packages', extensions: ['unitypackage'] }] })) ?? [];
+  },
+  async saveCustomPackage(input: import('./contracts').SaveCustomInput): Promise<AppSnapshot> {
+    await dispatch('saveCustomPackage', input);
+    return getSnapshot();
+  },
   async searchItems(query: string): Promise<AppSnapshot['items']> {
     if (!desktop) return [];
     return dispatch('searchItems', { query });

@@ -87,6 +87,7 @@ async function installTransportFixture(page: Page, coldReceipt = false, initialI
             return structuredClone(state.logs);
           }
           if (name === 'open_manual') { state.commands.push(name); return; }
+          if (name === 'plugin:dialog|open' && (args.options as any)?.filters?.[0]?.name === 'Unity packages') return ['/tmp/Custom.unitypackage'];
           if (name === 'plugin:dialog|open') return args.options?.multiple ? ['/tmp/Stored.7z', '/tmp/Invalid.zip'] : '/tmp/new-library';
           if (name !== 'dispatch' || !args.command) throw new Error('Unexpected test transport');
           const { type, input } = args.command;
@@ -98,6 +99,7 @@ async function installTransportFixture(page: Page, coldReceipt = false, initialI
             }
             return structuredClone(state.snapshot);
           }
+          if (type === 'saveCustomPackage') { state.snapshot.items.push({ ...state.snapshot.items[0], id: 'custom-a', title: input.name }); return; }
           if (type === 'updateItem') { const item = state.snapshot.items.find(item => item.id === input.itemId); if (item) Object.assign(item, { title: input.title, details: input.details }); return item; }
           if (type === 'getInstallations') return structuredClone(state.installation);
           if (type === 'setupUnityAdapter') return;
@@ -640,4 +642,22 @@ test('product information can be edited without selecting a Unity project', asyn
   await expect(dialog).not.toBeVisible();
   await expect(page.getByRole('heading', { name: 'Edited product' })).toBeVisible();
   await expect(page.locator('.right-rail')).toContainText('Test shop');
+});
+
+
+test('custom creation requires explicit files and an exact dependency without a project', async ({ page }) => {
+  await installTransportFixture(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'ライブラリ', exact: true }).click();
+  await page.getByRole('button', { name: /Test distribution/ }).click();
+  await page.getByRole('button', { name: '共通カスタムを作成' }).click();
+  const dialog = page.getByRole('dialog', { name: '共通カスタム', exact: true });
+  await dialog.getByLabel('商品名').fill('My custom');
+  await expect(dialog.getByRole('button', { name: '保存する' })).toBeDisabled();
+  await dialog.getByLabel('依存する版: Test distribution').selectOption('version-a');
+  await dialog.getByRole('button', { name: '改変済み unitypackage を選ぶ' }).click();
+  await dialog.getByRole('button', { name: '保存する' }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByRole('button', { name: /My custom/ })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__workflowFixture.commands)).not.toContain('installItem');
 });

@@ -22,8 +22,10 @@ pub use booth_download::{
 pub use deep_link::{parse_item_import_deep_link, ItemImportReceipt, ParsedItemImport};
 mod archive_contents;
 mod booth_download;
+mod custom;
 mod installation;
 mod library;
+pub use custom::SaveCustomInput;
 pub use library::ItemDetails;
 mod unitypackage;
 pub use archive_contents::{
@@ -31,7 +33,7 @@ pub use archive_contents::{
 };
 pub use installation::*;
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 const MAX_ARCHIVE_ENTRIES: usize = 100_000;
 const MAX_EXPANDED_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const MAX_BOOTH_DOWNLOAD_BYTES: u64 = 4 * 1024 * 1024 * 1024;
@@ -149,6 +151,9 @@ pub struct LibraryItem {
     pub title: String,
     pub booth_item_id: Option<String>,
     pub details: ItemDetails,
+    pub kind: String,
+    pub display_parent_id: Option<String>,
+    pub description: String,
     pub versions: Vec<LibraryVersion>,
 }
 
@@ -162,6 +167,7 @@ pub struct LibraryVersion {
     pub original_filename: String,
     pub state: String,
     pub files: Vec<ImportableFile>,
+    pub required_version_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -202,6 +208,7 @@ pub struct ImportArchiveInput {
 )]
 pub enum ApplicationCommand {
     GetSnapshot,
+    SaveCustomPackage(SaveCustomInput),
     SearchItems {
         query: String,
     },
@@ -531,6 +538,9 @@ impl Service {
         unity: &dyn UnityGateway,
     ) -> CoreResult<serde_json::Value> {
         match command {
+            ApplicationCommand::SaveCustomPackage(input) => {
+                serde_json::to_value(self.save_custom_package(input)?)
+            }
             ApplicationCommand::GetSnapshot => serde_json::to_value(self.snapshot()?),
             ApplicationCommand::SearchItems { query } => {
                 serde_json::to_value(self.search_items(&query)?)
@@ -1003,6 +1013,10 @@ fn migrate(conn: &mut Connection) -> CoreResult<()> {
     if version < 6 {
         library::migrate(conn)?;
     }
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version < 7 {
+        custom::migrate(conn)?;
+    }
     Ok(())
 }
 
@@ -1409,7 +1423,15 @@ fn load_item(conn: &Connection, id: String, title: String) -> CoreResult<Library
         [&id],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
+    let (kind, display_parent_id, description) = conn.query_row(
+        "SELECT kind,display_parent_id,description FROM packages WHERE id=?1",
+        [&id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
     Ok(LibraryItem {
+        kind,
+        display_parent_id,
+        description,
         booth_item_id,
         details: serde_json::from_str(&metadata)?,
         id,
@@ -1439,7 +1461,12 @@ fn load_version(
         })?
         .collect::<Result<Vec<_>, _>>()?;
     let label = format!("{}@{}", version_date, &content_hash[..8]);
+    let mut dependencies = conn.prepare("SELECT required_version_id FROM package_dependencies WHERE version_id=?1 ORDER BY required_version_id")?;
+    let required_version_ids = dependencies
+        .query_map([&id], |r| r.get(0))?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(LibraryVersion {
+        required_version_ids,
         id,
         label,
         version_date,

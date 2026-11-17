@@ -121,12 +121,12 @@ jobs:
         run: |
           cat > "$RUNNER_TEMP/omnooth-release-notes.md" <<EOF
           # ${RELEASE_NAME}
-          
+
           Automated main build for omnooth ${APP_VERSION}.
-          
+
           Source commit: ${COMMIT_SHA}
           Workflow run: ${RUN_NUMBER}
-          
+
           This is a draft release. Review and verify every installer on its target operating system before publishing.
           The Windows and Linux packages are unsigned. The macOS app uses ad-hoc signing and is not notarized.
           EOF

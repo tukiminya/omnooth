@@ -49,9 +49,9 @@ pnpm --dir desktop tauri build --debug --bundles app --config '{"bundle":{"activ
 
 同じ `sourceIdentity` の受信は既存ジョブにまとめる。待機中のジョブは新しい受付 receipt と URL を使い、受付時に保存した設定は保持する。ダウンロード中の重複は別ジョブを作らず、現在の処理と表示は最初に受け取った receipt のまま進める。失敗・期限切れ時に新しい URL が届いていれば、同じ job ID を新しい receipt で再待機し、次の試行に使う。それ以外は新しい Deep Link を待つ。成功済み source の再通知は保存済み結果を返し、再ダウンロードしない。
 
-各ジョブの `libraryPath` と `extractArchives` は Deep Link を受け取った時点で固定する。その後に一般設定を変更しても、待機中のジョブには反映しない。再起動時、保存済みの `queued` / `downloading` ジョブは URL が失われるため `awaitingUrl` になり、新しい Deep Link で同じジョブ ID と初回設定を使って再開する。期限内の自動再開は未実装。
+各ジョブの `libraryPath` と `extractArchives` は Deep Link を受け取った時点で固定する。その後に一般設定を変更しても、待機中のジョブには反映しない。再起動時、保存済みの `queued` / `downloading` ジョブは URL が失われるため `awaitingUrl` になり、新しい Deep Link で同じジョブ ID と初回設定を使って再開する。OS 資格情報ストアの鍵を使う暗号化保管が利用でき、有効期限を検証できる場合は自動再開する。
 
-署名付き `dlurl` と `order_id` はプロセス内の `ParsedItemImport` にのみ保持し、queue JSON へ書き込まない。JSON は `id`、安全な `receipt`、`extractArchives`、`libraryPath`、`status`、`errorCode`、`localItemId` のみを含む。メモリー上限は2000件。`appData/logs/` のセッション JSONL は各256 KiBまでを4セグメントで循環し、最大8セッション分を保持する。OS 資格情報による暗号化は未実装であり、期限前 URL の自動復旧も行わない。
+署名付き `dlurl` と `order_id` はプロセス内の `ParsedItemImport` にのみ保持し、queue JSON へ書き込まない。JSON は `id`、安全な `receipt`、`extractArchives`、`libraryPath`、`status`、`errorCode`、`localItemId` のみを含む。メモリー上限は2000件。`appData/logs/` のセッション JSONL は各256 KiBまでを4セグメントで循環し、最大8セッション分を保持する。署名 URL は別の protected-requests に AES-256-GCM で暗号化し、鍵を OS 資格情報へ保存する。新しい nonce とジョブ ID の認証を使い、再起動時に受信情報と期限を再検証する。期限が不明・切れている場合や鍵が使えない場合は新リンクを待つ。キュー JSON に URL や注文 ID は入れない。成功・失効・失敗で対応する暗号文を削除する。
 
 画面下部の「ログ」は「マニュアル」の直上にある。現在のセッションを表示し、ダイアログを開いている間は1秒ごとに更新する。情報・警告・エラーのレベル絞り込みと手動更新ができる。ロガーは URL と、`dlurl`、`order_id`、password/token、authorization 等の既知の機密キーに続く値を伏せる。
 
@@ -67,14 +67,14 @@ BOOTH 実ファイルの進行状況と未完了の検証項目は [BOOTH 取り
 - 未展開 ZIP の収録パス・種類・宣言サイズの表示と検索。中身を解凍せずに unitypackage を選択できる。暗号化メンバーは一覧に表示するが選択不可。読み込み失敗時は再試行できる。
 - unitypackage の一覧と明示選択・順序変更。保存済みの原本と版の選択を分け、初期状態では何も選択しない。
 - ライブラリ保存先、言語、取り込み時の展開設定の保存。保存先変更は以後の取り込みに適用し、以前の原本の絶対パスも保持する。既存の原本は移動しない。
-- 日本語・英語・韓国語の画面。初回の本体の保存言語は現在 ja。ブラウザ確認では地域コードを正規化する。OS ロケールを本体の初回設定へ渡す処理は後続。
+- 日本語・英語・韓国語の画面。初回は OS の優先言語を基本言語に正規化し、未対応時は ja。保存済み言語は OS より優先する。
 - 複数のローカルファイルの取り込みで、一部が失敗しても成功分と失敗ファイルを分けて表示する。
 - BOOTH Deep Link の永続 FIFO、ダウンロード、公開メタデータ取得、ローカルライブラリ登録。受信時のライブラリ保存先と展開設定をジョブに保存し、成功済み source を再ダウンロードしない。
 - 起動・command・取り込みエラーを記録する永続活動ログ。署名 URL などは redaction し、UI は現在のセッションのログを表示する。
 
 ローカルファイル取り込みでは元ファイル名の完全一致を同一パッケージの仮の識別に使う。BOOTH 取り込みでは商品 ID と variation・配信元のパスから作った `sourceIdentity` を使う。BOOTH 公開メタデータの更新日時は、variation ID と元ファイル名の一意な一致を確認した場合だけ使い、取得できない場合は取り込み日の UTC 日付にする。どちらもファイル名から版番号を抽出しない。共通カスタム・依存・適用台帳用の本体17テーブルをすべて実装した段階ではない。
 
-7z / RAR / tar 系は原本の保存までで、展開を依頼した場合は未対応であることを表示する。暗号化 ZIP のパスワード入力・再開は未実装。unitypackage は原本を保持し、適用計画で内部 Assets / GUID を解析・検証する。
+7z / RAR / tar / tar.gz / tar.bz2 / tar.xz と別名拡張子の展開を追加した。ZIP / 7z / RAR のパスワードは今回の展開だけに使う。暗号化原本を登録して入力を待ち、キャンセル・誤入力でも原本を保持する。件数10万・展開8 GiB、7z / xz / RAR の辞書等512 MiBを上限とする。リンク・特殊ファイル・危険パス・大小文字衝突を拒否する。未展開の一覧・選択は ZIP の機能。その他の形式は明示展開後に unitypackage を選ぶ。複数巻とファイルごとに異なるパスワードを使う RAR は初期 UI の対象外。形式・暗号方式の全組合せと他 OS の実機は追加検証が必要。unitypackage は原本を保持し、適用計画で内部 Assets / GUID を解析・検証する。
 
 ## Unity への適用と後続作業
 
@@ -84,9 +84,21 @@ BOOTH 実ファイルの進行状況と未完了の検証項目は [BOOTH 取り
 
 本体の結果確認ワーカーはダイアログを閉じても動作する。再起動後も待機ジョブを確認し、準備中に中断したジョブは復旧へ進む。成功確定後だけ選択分の一時 unitypackage を削除し、原本とバックアップは保持する。
 
-macOS / Unity 2022.3.22f1 の一時プロジェクトで、テキスト fixture の実 ImportPackage・完了通知・内容・GUID と `.meta` の一致を確認した。Windows / Linux、VRChat 実商品、ドメインリロードを伴う途中復旧は未確認。[使い方・実装範囲・検証](../docs/unity-installation.md) と [アダプターの通信](../unity/com.omnooth.editor/README.md) を参照する。2026-11-06 の独立 ZIP アダプター API も残しているが、本体は所有台帳を持つ共通適用 service を使う。
+macOS / Unity 2022.3.22f1 の一時プロジェクトで、テキスト・Material・Prefab・スクリプトの実 ImportPackage、Material 参照、ドメインリロード後の完了、GUID と asset / `.meta` の一致を確認した。エク338件・霧雨262件の内部アセット解析も読み取り専用で確認した。Windows / Linux、VRChat 実商品、ドメインリロードを伴う途中復旧は未確認。[使い方・実装範囲・検証](../docs/unity-installation.md) と [アダプターの通信](../unity/com.omnooth.editor/README.md) を参照する。2026-11-06 の独立 ZIP アダプター API も残しているが、本体は所有台帳を持つ共通適用 service を使う。
 
-共通カスタム、検索演算子、OS 認証、外部拡張の標準入出力は後続。過去の版は現在すべて保持し、保持設定の保存値を使う安全な整理処理も後続。BOOTH の署名 URL を OS 資格情報で暗号化して保管する処理、再起動後に期限内の URL を自動再開する処理は未実装。今回の実装計画は [実装計画](../docs/implementation-plan.md) に記録した。
+商品情報の保存・編集、OR / AND・引用符・shop / category / tag / is:starred / age の検索、商品説明の明示的な見出しから抽出した更新履歴表示を追加した。外部 HTML は実行せず本文として表示する。共通カスタムはライブラリ詳細から作成・編集できる。改変済み unitypackage と完全一致依存の安定マニフェストで版を識別し、表示先は依存と分離する。依存ファイルは適用確認時に明示選択する。非表示は専用の初回説明を了承して利用する。解除は macOS LocalAuthentication / Windows Hello を使い、成功後の5分間だけバックエンドの表示セッションを有効にする。アプリから離れると失効する。Linux は操作を表示しない。OS 認証ダイアログの実操作は未確認。外部拡張の標準入出力は後続。旧版保持をオフにしても保存だけでは削除せず、「設定を保存して整理内容を確認」で対象を確認する。最新・適用中・依存・計画や履歴に参照される版、共有原本を保護する。未実行計画は7日、成功・復旧済みバックアップは30日経過後を候補にする。展開時に全ファイル・ディレクトリの台帳を記録し、変更・追加や台帳がない古い展開内容を保護する。ユーザー変更・不明なファイルを含む staging / backup は整理しない。確認内容のハッシュを再検証し、途中終了は永続ジャーナルと DB のコミット記録でファイルを復元する。削除できない退避ファイルは保持する。BOOTH の署名 URL の暗号化保管と期限内の自動再開を追加した。macOS Keychain の保存・読み戻し・削除は実機で確認した。Windows / Linux は追加確認が必要。今回の実装計画は [実装計画](../docs/implementation-plan.md) に記録した。
+
+## 2026-11-18 の検証
+
+Rust 104件、Playwright 32件、TypeScript / Vite、Clippy（警告をエラー扱い）、デバッグ本体ビルドが成功した。OS ハンドラー変更と実キー保存・実商品入力のテストは通常実行から除外し、必要なものだけを明示実行する。[最新の結果と制約](../docs/implementation-validation.md) を参照する。
+
+```sh
+cargo test -p omnooth-desktop --offline native_credential_store_round_trip -- --ignored
+python3 unity/tests/validate-editor.py --unity <Unity実行ファイル> --extended --timeout 55
+OMNOOTH_TEST_PACKAGE=<unitypackageのパス> cargo test -p omnooth-core --offline inspect_external_package_without_executing_editor_code -- --ignored --nocapture
+```
+
+実商品入力のテストは原本を解析するだけで、Unity やプロジェクトへ適用しない。macOS / Windows の非表示解除の対話認証は別の手動確認となる。
 
 ## Figma とフォント
 

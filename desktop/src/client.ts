@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import type { AppSettings, AppSnapshot, ArchiveBatchResult, ArchiveContents, DeepLinkStatus, ImportResult, LogSnapshot, InstallSelection, InstallPlan, InstallationJob, InstallationState, RecoveryReport } from './contracts';
 
 const desktop = isTauri();
+let visibilityGeneration = 0;
 
 function normalizeLanguage(value: string): AppSettings['language'] {
   const base = value.toLowerCase().split(/[-_]/)[0];
@@ -29,12 +30,42 @@ async function getSnapshot(): Promise<AppSnapshot> {
       },
     };
   }
-  return dispatch('getSnapshot');
+  const generation = visibilityGeneration;
+  const result = await dispatch<AppSnapshot>('getSnapshot');
+  return generation === visibilityGeneration ? result : getSnapshot();
 }
 
 export const client = {
   isDesktop: desktop,
   getSnapshot,
+  async buildCleanupPlan(): Promise<import('./contracts').CleanupPlan> { return dispatch('buildCleanupPlan'); },
+  async executeCleanup(planHash: string): Promise<import('./contracts').CleanupReport> { return dispatch('executeCleanup', { planHash }); },
+  async privacyAction(type: 'acknowledgePrivacyNotice' | 'unlockHiddenItems' | 'lockHiddenItems', item?: { itemId: string; hidden: boolean }): Promise<AppSnapshot> {
+    await dispatch(item ? 'setItemHidden' : type, item);
+    return getSnapshot();
+  },
+  async onVisibilityLocked(callback: () => void): Promise<() => void> {
+    if (!desktop) return () => {};
+    return listen('visibility-locked', () => { visibilityGeneration++; callback(); });
+  },
+  async chooseCustomFiles(): Promise<string[]> {
+    requireDesktop();
+    return (await open({ multiple: true, filters: [{ name: 'Unity packages', extensions: ['unitypackage'] }] })) ?? [];
+  },
+  async saveCustomPackage(input: import('./contracts').SaveCustomInput): Promise<AppSnapshot> {
+    await dispatch('saveCustomPackage', input);
+    return getSnapshot();
+  },
+  async searchItems(query: string): Promise<AppSnapshot['items']> {
+    if (!desktop) return [];
+    const generation = visibilityGeneration;
+    const result = await dispatch<AppSnapshot['items']>('searchItems', { query });
+    return generation === visibilityGeneration ? result : [];
+  },
+  async updateItem(itemId: string, title: string, details: NonNullable<AppSnapshot['items'][number]['details']>): Promise<AppSnapshot> {
+    await dispatch('updateItem', { itemId, title, details });
+    return getSnapshot();
+  },
   async getDeepLinkStatus(): Promise<DeepLinkStatus> {
     if (!desktop) return { scheme: 'booth-library-manager', registered: false, receivedCount: 0, lastReceipt: null, lastError: null };
     return invoke('get_deep_link_status');
@@ -95,8 +126,8 @@ export const client = {
     }
     return { snapshot: await getSnapshot(), imported, failed };
   },
-  async extractArchive(versionId: string): Promise<AppSnapshot> {
-    await dispatch('extractArchive', { versionId });
+  async extractArchive(versionId: string, password?: string): Promise<AppSnapshot> {
+    await dispatch(password === undefined ? 'extractArchive' : 'extractArchiveWithPassword', password === undefined ? { versionId } : { versionId, password });
     return getSnapshot();
   },
   async inspectArchive(versionId: string): Promise<ArchiveContents> {

@@ -9,15 +9,29 @@ name = "omnooth_desktop"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
+aes-gcm = { version = "0.10.3", features = ["zeroize"] }
+getrandom = "0.4"
+keyring = { version = "4.2.0", features = ["apple-native-keyring-store"] }
 omnooth-core = { version = "0.1.0", path = "../../crates/omnooth-core" }
 omnooth-unity = { version = "0.1.0", path = "../../crates/omnooth-unity" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+sys-locale = "0.3.2"
 tauri = { version = "~2.11.5", features = [] }
 tauri-plugin-deep-link = "2"
 tauri-plugin-dialog = "~2.7.2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+zeroize = "=1.9.0"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2 = "0.6.4"
+objc2-foundation = "0.3.2"
+objc2-local-authentication = "0.3.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61.3", features = ["Security_Credentials_UI", "Win32_System_WinRT", "Win32_Foundation", "Foundation"] }

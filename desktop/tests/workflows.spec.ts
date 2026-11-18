@@ -57,13 +57,18 @@ async function installTransportFixture(page: Page, coldReceipt = false, initialI
       logsFail: false,
     };
     const callbacks = new Map<number, (event: unknown) => void>();
-    const eventHandlers = new Map<number, number>();
+    const eventHandlers = new Map<number, { event: string; handler: number }>();
     let callbackId = 0;
     let listenerId = 0;
     Object.assign(state, {
       emitDeepLink(status: typeof state.deepLink) {
         state.deepLink = status;
-        for (const [id, handler] of eventHandlers) callbacks.get(handler)?.({ event: 'deep-link-status-changed', id, payload: status });
+        for (const [id, listener] of eventHandlers) if (listener.event === 'deep-link-status-changed') callbacks.get(listener.handler)?.({ event: 'deep-link-status-changed', id, payload: status });
+      },
+      emitVisibilityLocked() {
+        (state.snapshot as any).privacy = { available: true, noticeAcknowledged: true, unlocked: false, expiresAt: null };
+        state.snapshot.items = state.snapshot.items.filter(item => !(item as any).isHidden);
+        for (const [id, listener] of eventHandlers) if (listener.event === 'visibility-locked') callbacks.get(listener.handler)?.({ event: 'visibility-locked', id, payload: null });
       },
       listenerCount: () => eventHandlers.size,
     });
@@ -74,9 +79,10 @@ async function installTransportFixture(page: Page, coldReceipt = false, initialI
       __TAURI_INTERNALS__: {
         transformCallback(callback: (event: unknown) => void) { const id = ++callbackId; callbacks.set(id, callback); return id; },
         unregisterCallback(id: number) { callbacks.delete(id); },
-        async invoke(name: string, args: { eventId?: number; handler?: number; operation?: string; message?: string; options?: { multiple?: boolean }; command?: { type: string; input?: any } }) {
-          if (name === 'plugin:event|listen') { const id = ++listenerId; eventHandlers.set(id, args.handler!); return id; }
+        async invoke(name: string, args: { event?: string; eventId?: number; handler?: number; operation?: string; message?: string; options?: { multiple?: boolean }; command?: { type: string; input?: any } }) {
+          if (name === 'plugin:event|listen') { const id = ++listenerId; eventHandlers.set(id, { event: args.event!, handler: args.handler! }); return id; }
           if (name === 'plugin:event|unlisten') { eventHandlers.delete(args.eventId!); return; }
+          if (name === 'dispatch' && args.command?.type === 'searchItems') return structuredClone(state.snapshot.items.filter(item => item.title.toLowerCase().includes(args.command!.input.query.toLowerCase())));
           if (name === 'get_deep_link_status') return structuredClone(state.deepLink);
           if (name === 'register_deep_link') { state.commands.push(name); state.deepLink.registered = true; return structuredClone(state.deepLink); }
           if (name === 'report_client_error') { state.reportedErrors.push({ operation: args.operation!, message: args.message! }); return; }
@@ -86,6 +92,7 @@ async function installTransportFixture(page: Page, coldReceipt = false, initialI
             return structuredClone(state.logs);
           }
           if (name === 'open_manual') { state.commands.push(name); return; }
+          if (name === 'plugin:dialog|open' && (args.options as any)?.filters?.[0]?.name === 'Unity packages') return ['/tmp/Custom.unitypackage'];
           if (name === 'plugin:dialog|open') return args.options?.multiple ? ['/tmp/Stored.7z', '/tmp/Invalid.zip'] : '/tmp/new-library';
           if (name !== 'dispatch' || !args.command) throw new Error('Unexpected test transport');
           const { type, input } = args.command;
@@ -97,6 +104,11 @@ async function installTransportFixture(page: Page, coldReceipt = false, initialI
             }
             return structuredClone(state.snapshot);
           }
+          if (type === 'acknowledgePrivacyNotice') { (state.snapshot as any).privacy.noticeAcknowledged = true; return; }
+          if (type === 'unlockHiddenItems') throw new Error('AUTH_CANCELLED');
+          if (type === 'setItemHidden') { state.snapshot.items = state.snapshot.items.filter(item => item.id !== input.itemId); return; }
+          if (type === 'saveCustomPackage') { state.snapshot.items.push({ ...state.snapshot.items[0], id: 'custom-a', title: input.name }); return; }
+          if (type === 'updateItem') { const item = state.snapshot.items.find(item => item.id === input.itemId); if (item) Object.assign(item, { title: input.title, details: input.details }); return item; }
           if (type === 'getInstallations') return structuredClone(state.installation);
           if (type === 'setupUnityAdapter') return;
           if (type === 'buildInstallPlan') {
@@ -139,6 +151,10 @@ async function installTransportFixture(page: Page, coldReceipt = false, initialI
               { id: 'zip-e', relativePath: 'Locked.unitypackage', kind: 'unitypackage', sizeBytes: 100, encrypted: true },
             ] };
           }
+          if (type === 'buildCleanupPlan') return { planHash: 'cleanup-plan', versions: [['version-b', 'Test distribution · 2026-10-26@dddddddd']], stagingCount: 0, backupCount: 0, bytes: 42 };
+          if (type === 'executeCleanup') { state.snapshot.items[0].versions = state.snapshot.items[0].versions.filter(version => version.id !== 'version-b'); return { removedVersions: 1, removedDirectories: 0, retainedPaths: [] }; }
+          if (type === 'extractArchive') throw new Error('ARCHIVE_PASSWORD_REQUIRED');
+          if (type === 'extractArchiveWithPassword') { if (input.password !== 'test-password') throw new Error('ARCHIVE_PASSWORD_INVALID'); state.snapshot.items[0].versions[1].state = 'extracted'; return; }
           if (type === 'importArchive') {
             if (input.originalFilename === 'Invalid.zip') throw 'ARCHIVE_FORMAT_MISMATCH';
             return { item: state.snapshot.items[0], reused: true, warnings: ['EXTRACTION_UNSUPPORTED_STORED_ONLY'] };
@@ -621,4 +637,105 @@ test('Unity jobs resume inspection and protect user edits during recovery', asyn
   await dialog.getByRole('button', { name: '適用前のファイルへ復旧', exact: true }).click();
   await expect(dialog.getByRole('status')).toContainText('適用前のファイルへ復旧しました。');
   expect(await page.evaluate(() => (window as any).__workflowFixture.planInputs)).toEqual([]);
+});
+
+
+test('product information can be edited without selecting a Unity project', async ({ page }) => {
+  await installTransportFixture(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'ライブラリ', exact: true }).click();
+  await page.getByRole('button', { name: /Test distribution/ }).click();
+  await page.getByRole('button', { name: '商品情報を編集' }).click();
+  const dialog = page.getByRole('dialog', { name: '商品情報を編集' });
+  await dialog.getByLabel('商品名').fill('Edited product');
+  await dialog.getByLabel('ショップ', { exact: true }).fill('Test shop');
+  await dialog.getByLabel('お気に入り').check();
+  await dialog.getByRole('button', { name: '保存する' }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Edited product' })).toBeVisible();
+  await expect(page.locator('.right-rail')).toContainText('Test shop');
+});
+
+
+test('custom creation requires explicit files and an exact dependency without a project', async ({ page }) => {
+  await installTransportFixture(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'ライブラリ', exact: true }).click();
+  await page.getByRole('button', { name: /Test distribution/ }).click();
+  await page.getByRole('button', { name: '共通カスタムを作成' }).click();
+  const dialog = page.getByRole('dialog', { name: '共通カスタム', exact: true });
+  await dialog.getByLabel('商品名').fill('My custom');
+  await expect(dialog.getByRole('button', { name: '保存する' })).toBeDisabled();
+  await dialog.getByLabel('依存する版: Test distribution').selectOption('version-a');
+  await dialog.getByRole('button', { name: '改変済み unitypackage を選ぶ' }).click();
+  await dialog.getByRole('button', { name: '保存する' }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByRole('button', { name: /My custom/ })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__workflowFixture.commands)).not.toContain('installItem');
+});
+
+
+test('privacy notice cancellation changes nothing and hide requires explicit acknowledgement', async ({ page }) => {
+  await installTransportFixture(page);
+  await page.addInitScript(() => Object.assign((window as any).__workflowFixture.snapshot, { privacy: { available: true, noticeAcknowledged: false, unlocked: false, expiresAt: null } }));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'ライブラリ', exact: true }).click();
+  await page.getByRole('button', { name: /Test distribution/ }).click();
+  await page.getByRole('button', { name: 'この商品を非表示にする' }).click();
+  const dialog = page.getByRole('dialog', { name: '非表示機能について' });
+  await expect(dialog).toContainText('保存ファイルは暗号化されず');
+  await dialog.getByRole('button', { name: 'キャンセル' }).click();
+  expect(await page.evaluate(() => (window as any).__workflowFixture.commands)).not.toContain('acknowledgePrivacyNotice');
+  await page.getByRole('button', { name: 'この商品を非表示にする' }).click();
+  await dialog.getByRole('button', { name: '理解して続ける' }).click();
+  await expect(page.getByRole('button', { name: /Test distribution/ })).not.toBeVisible();
+  await page.getByRole('button', { name: '非表示を解除', exact: true }).click();
+  await expect(page.getByText('認証がキャンセルされたか、成功しませんでした。', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Test distribution/ })).not.toBeVisible();
+});
+
+
+test('archive password remains transient and an incorrect password can be retried', async ({ page }) => {
+  await installTransportFixture(page); await page.goto('/');
+  await page.getByRole('button', { name: 'ライブラリ', exact: true }).click();
+  await page.getByRole('button', { name: /Test distribution/ }).click();
+  await page.getByRole('combobox', { name: 'バージョン', exact: true }).selectOption('version-b');
+  await page.getByRole('button', { name: '原本を展開', exact: true }).click();
+  const dialog=page.getByRole('dialog',{name:'アーカイブのパスワード'});
+  await dialog.getByLabel('パスワード',{exact:true}).fill('wrong');
+  await dialog.getByRole('button',{name:'原本を展開',exact:true}).click();
+  await expect(dialog).toBeVisible(); await expect(dialog).toContainText('パスワードが一致しないか');
+  await dialog.getByLabel('パスワード',{exact:true}).fill('test-password');
+  await dialog.getByRole('button',{name:'原本を展開',exact:true}).click();
+  await expect(dialog).not.toBeVisible();
+  expect(await page.evaluate(()=>JSON.stringify(localStorage))).not.toContain('test-password');
+});
+
+
+test('cleanup requires a separate review and confirmation after saving retention settings', async ({ page }) => {
+  await installTransportFixture(page);await page.goto('/');await page.getByRole('button',{name:'設定',exact:true}).click();
+  await page.getByRole('checkbox',{name:/過去のバージョンを保持する/}).uncheck();
+  await page.getByRole('button',{name:'設定を保存して整理内容を確認'}).click();
+  const dialog=page.getByRole('dialog',{name:'ライブラリの整理'});
+  await expect(dialog).toContainText('2026-10-26@dddddddd');
+  expect(await page.evaluate(()=>(window as any).__workflowFixture.commands)).not.toContain('executeCleanup');
+  await dialog.getByRole('button',{name:'確認した対象を整理する'}).click();await expect(dialog).toContainText('整理が完了しました。');
+  expect(await page.evaluate(()=>(window as any).__workflowFixture.snapshot.items[0].versions.length)).toBe(1);
+});
+
+
+test('locking clears cached hidden views and restores the remaining public library', async ({ page }) => {
+  await installTransportFixture(page);
+  await page.addInitScript(() => {
+    const state=(window as any).__workflowFixture;
+    state.snapshot.privacy={available:true,noticeAcknowledged:true,unlocked:true,expiresAt:new Date(Date.now()+300000).toISOString()};
+    state.snapshot.items[0].isHidden=true;
+    state.snapshot.items.push({...state.snapshot.items[0],id:'public-item',title:'Public item',isHidden:false});
+  });
+  await page.goto('/');await page.getByRole('button',{name:'ライブラリ',exact:true}).click();
+  await expect(page.getByRole('button',{name:/Test distribution/})).toBeVisible();
+  await page.evaluate(()=>(window as any).__workflowFixture.emitVisibilityLocked());
+  await expect(page.getByRole('button',{name:/Test distribution/})).not.toBeVisible();
+  await expect(page.getByRole('button',{name:/Public item/})).toBeVisible();
+  await expect(page.getByRole('button',{name:'非表示を解除',exact:true})).toBeVisible();
 });

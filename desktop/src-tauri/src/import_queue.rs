@@ -185,6 +185,7 @@ impl From<serde_json::Error> for QueueError {
 /// Callers should serialize access externally (for example with a `Mutex`).
 pub struct ImportQueue {
     storage_path: PathBuf,
+    vault: Option<crate::request_vault::RequestVault>,
     records: VecDeque<QueueRecord>,
     requests: HashMap<u64, ParsedItemImport>,
 }
@@ -212,6 +213,7 @@ impl ImportQueue {
         validate_records(&records)?;
         let mut queue = Self {
             storage_path,
+            vault: None,
             records: records.into(),
             requests: HashMap::new(),
         };
@@ -227,6 +229,43 @@ impl ImportQueue {
             queue.persist()?;
         }
         Ok(queue)
+    }
+
+    pub fn enable_protected_restart(
+        &mut self,
+        vault: crate::request_vault::RequestVault,
+    ) -> Result<(), QueueError> {
+        for record in &mut self.records {
+            if matches!(
+                record.status,
+                JobStatus::AwaitingUrl | JobStatus::Queued | JobStatus::Downloading
+            ) {
+                if let Some(request) = vault
+                    .restore(record.id)
+                    .filter(|request| request.receipt() == &record.receipt)
+                {
+                    record.status = JobStatus::Queued;
+                    record.error_code = None;
+                    self.requests.insert(record.id, request);
+                } else {
+                    vault.remove(record.id);
+                }
+            } else {
+                vault.remove(record.id);
+            }
+        }
+        self.vault = Some(vault);
+        self.persist()
+    }
+
+    fn remember(&mut self, id: u64, request: ParsedItemImport) -> Result<(), QueueError> {
+        if let Some(vault) = &self.vault {
+            vault
+                .save(id, &request)
+                .map_err(|_| QueueError::InvalidInput)?;
+        }
+        self.requests.insert(id, request);
+        Ok(())
     }
 
     pub fn enqueue(
@@ -260,7 +299,7 @@ impl ImportQueue {
                     return Err(error);
                 }
                 let record = self.records[index].clone();
-                self.requests.insert(record.id, parsed);
+                self.remember(record.id, parsed)?;
                 return Ok(EnqueueOutcome {
                     record,
                     disposition: EnqueueDisposition::Reused,
@@ -268,7 +307,7 @@ impl ImportQueue {
             }
             let record = self.records[index].clone();
             // Keep the newest URL and receipt as a one-time retry if the active download fails.
-            self.requests.insert(record.id, parsed);
+            self.remember(record.id, parsed)?;
             return Ok(EnqueueOutcome {
                 record,
                 disposition: EnqueueDisposition::Reused,
@@ -289,7 +328,7 @@ impl ImportQueue {
                 return Err(error);
             }
             let record = self.records[index].clone();
-            self.requests.insert(record.id, parsed);
+            self.remember(record.id, parsed)?;
             return Ok(EnqueueOutcome {
                 record,
                 disposition: EnqueueDisposition::Reused,
@@ -323,7 +362,7 @@ impl ImportQueue {
             self.records.pop_back();
             return Err(error);
         }
-        self.requests.insert(id, parsed);
+        self.remember(id, parsed)?;
         Ok(EnqueueOutcome {
             record,
             disposition: EnqueueDisposition::Accepted,
@@ -432,6 +471,11 @@ impl ImportQueue {
             self.requests.remove(&job_id);
         }
         let record = self.records[index].clone();
+        if record.status != JobStatus::Queued {
+            if let Some(vault) = &self.vault {
+                vault.remove(job_id);
+            }
+        }
         self.trim_history()?;
         Ok(record)
     }
@@ -446,6 +490,9 @@ impl ImportQueue {
         let safe_code =
             validate_error_code(error_code).unwrap_or_else(|_| "IMPORT_WORKER_FAILED".to_owned());
         self.requests.remove(&job_id);
+        if let Some(vault) = &self.vault {
+            vault.remove(job_id);
+        }
         let record = &mut self.records[index];
         record.status = JobStatus::Failed;
         record.error_code = Some(safe_code);
@@ -650,6 +697,15 @@ fn replace_file(from: &Path, to: &Path) -> Result<(), QueueError> {
     Ok(())
 }
 
+#[cfg(not(windows))]
+fn replace_file(from: &Path, to: &Path) -> Result<(), QueueError> {
+    fs::rename(from, to)?;
+    if let Some(parent) = to.parent() {
+        File::open(parent)?.sync_all()?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -707,6 +763,43 @@ mod tests {
             "booth-library-manager://item-import?dlurl=https%3A%2F%2Fs6.booth.pm%2Ffiles%2F{path_name}%3Ftoken%3D{token}&downloadable_filename={filename}&item_id=8596249&variation_id=14346065&order_id={order_id}"
         );
         parse_item_import_deep_link(&url).unwrap()
+    }
+
+    #[test]
+    fn protected_restart_preserves_job_order_and_initial_settings() {
+        let dir = temp_dir();
+        let key = [13; 32];
+        let mut queue = ImportQueue::open(&dir).unwrap();
+        queue
+            .enable_protected_restart(
+                crate::request_vault::RequestVault::with_key(&dir, key).unwrap(),
+            )
+            .unwrap();
+        let request=omnooth_core::parse_item_import_deep_link("booth-library-manager://item-import?dlurl=https%3A%2F%2Fs6.booth.pm%2Ffiles%2Fa.zip%3FX-Amz-Date%3D20990101T000000Z%26X-Amz-Expires%3D86400&downloadable_filename=a.zip&item_id=1").unwrap();
+        let accepted = queue
+            .enqueue(request, &settings("/original-library", false))
+            .unwrap();
+        queue.take_next().unwrap().unwrap();
+        drop(queue);
+        let mut queue = ImportQueue::open(&dir).unwrap();
+        queue
+            .enable_protected_restart(
+                crate::request_vault::RequestVault::with_key(&dir, key).unwrap(),
+            )
+            .unwrap();
+        let job = queue.take_next().unwrap().unwrap();
+        assert_eq!(job.id, accepted.record.id);
+        assert_eq!(job.library_path, "/original-library");
+        assert!(!job.extract_archives);
+        queue
+            .finish(job.id, JobStatus::Succeeded, None, Some("item-a"))
+            .unwrap();
+        assert!(!dir
+            .join("protected-requests")
+            .join(format!("{}.enc", job.id))
+            .exists());
+        let bytes = fs::read(dir.join("import-queue.json")).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("X-Amz"));
     }
 
     fn settings(library_path: &str, extract_archives: bool) -> AppSettings {
@@ -982,13 +1075,4 @@ mod tests {
         assert_eq!(error.code(), "QUEUE_STORAGE_ERROR");
         assert_eq!(fs::read(&storage).unwrap(), corrupt);
     }
-}
-
-#[cfg(not(windows))]
-fn replace_file(from: &Path, to: &Path) -> Result<(), QueueError> {
-    fs::rename(from, to)?;
-    if let Some(parent) = to.parent() {
-        File::open(parent)?.sync_all()?;
-    }
-    Ok(())
 }

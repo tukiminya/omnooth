@@ -34,6 +34,25 @@ impl std::fmt::Debug for ParsedItemImport {
 }
 
 impl ParsedItemImport {
+    /// Sensitive serialization used only inside the native encrypted request vault.
+    pub fn protected_resume_link(&self) -> String {
+        let mut query = url::form_urlencoded::Serializer::new(String::new());
+        query
+            .append_pair("dlurl", &self.download_url)
+            .append_pair("downloadable_filename", &self.receipt.filename)
+            .append_pair("item_id", &self.receipt.booth_item_id);
+        if let Some(id) = self.receipt.variation_id.as_ref() {
+            query.append_pair("variation_id", id);
+        }
+        format!("booth-library-manager://item-import?{}", query.finish())
+    }
+    /// Unknown expirations are never assumed safe for automatic restart.
+    pub fn can_resume_now(&self) -> bool {
+        self.url_expires_at
+            .as_deref()
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .is_some_and(|expiry| expiry.with_timezone(&Utc) > Utc::now())
+    }
     pub fn receipt(&self) -> &ItemImportReceipt {
         &self.receipt
     }
@@ -101,7 +120,7 @@ pub fn parse_item_import_deep_link(url: &str) -> CoreResult<ParsedItemImport> {
     }
     let booth_item_id = values
         .remove("item_id")
-        .filter(|v| is_positive_decimal(&v))
+        .filter(|v| is_positive_decimal(v))
         .ok_or(CoreError::Invalid("INVALID_DEEP_LINK"))?;
     if crate::validate_filename(&filename).is_err() || import_format(&filename).is_err() {
         return Err(CoreError::Invalid("INVALID_FILENAME"));
@@ -252,11 +271,10 @@ pub(crate) fn expiry_time(url: &Url) -> CoreResult<Option<String>> {
                     return Err(CoreError::Invalid("INVALID_DOWNLOAD_URL"));
                 }
             }
-            "X-Amz-Expires" => {
-                if expires.replace(value.into_owned()).is_some() {
-                    return Err(CoreError::Invalid("INVALID_DOWNLOAD_URL"));
-                }
+            "X-Amz-Expires" if expires.is_some() => {
+                return Err(CoreError::Invalid("INVALID_DOWNLOAD_URL"))
             }
+            "X-Amz-Expires" => expires = Some(value.into_owned()),
             _ => {}
         }
     }

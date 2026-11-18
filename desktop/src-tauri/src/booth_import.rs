@@ -199,7 +199,7 @@ pub fn receive_urls(app: &tauri::AppHandle, urls: impl IntoIterator<Item = Strin
     start_worker(app);
 }
 
-fn start_worker(app: &tauri::AppHandle) {
+pub(crate) fn start_worker(app: &tauri::AppHandle) {
     let backend = app.state::<Backend>();
     if backend
         .worker_running

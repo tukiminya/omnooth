@@ -31,6 +31,7 @@ const MAX_METADATA_BYTES: usize = 1024 * 1024;
 pub struct BoothItemMetadata {
     pub title: Option<String>,
     pub source_updated_at: Option<String>,
+    pub details: crate::ItemDetails,
 }
 
 /// Completed download staged beneath app data. Its path and digest are private to prevent
@@ -142,7 +143,7 @@ where
             return Err(error);
         }
     };
-    if let Err(_) = fs::rename(&part_path, &final_path) {
+    if fs::rename(&part_path, &final_path).is_err() {
         let _ = fs::remove_file(&part_path);
         return Err(CoreError::Download("DOWNLOAD_IO_ERROR"));
     }
@@ -278,7 +279,52 @@ fn adapt_metadata(
     if title.is_none() && source_updated_at.is_none() {
         return None;
     }
+    let description = data
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .chars()
+        .take(32768)
+        .collect::<String>();
+    let details = crate::ItemDetails {
+        release_notes: crate::library::release_notes(&description),
+        description,
+        shop: data
+            .pointer("/shop/name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .chars()
+            .take(512)
+            .collect(),
+        category: data
+            .pointer("/category/name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .chars()
+            .take(512)
+            .collect(),
+        tags: data
+            .get("tags")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|v| {
+                v.as_str()
+                    .or_else(|| v.get("name").and_then(|v| v.as_str()))
+            })
+            .take(100)
+            .map(|s| s.chars().take(128).collect())
+            .collect(),
+        age_rating: match data.get("is_adult").and_then(|v| v.as_bool()) {
+            Some(true) => "r18",
+            Some(false) => "all",
+            None => "unknown",
+        }
+        .into(),
+        ..Default::default()
+    };
     Some(BoothItemMetadata {
+        details,
         title,
         source_updated_at,
     })

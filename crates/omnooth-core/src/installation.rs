@@ -460,7 +460,12 @@ impl Service {
         }
         originals.insert(PathBuf::from(&object), expected.clone());
         let mut result = Vec::new();
-        if filename.to_ascii_lowercase().ends_with(".zip") {
+        let extracted_state: bool = conn.query_row(
+            "SELECT state='extracted' FROM package_versions WHERE id=?1",
+            [&selection.version_id],
+            |r| r.get(0),
+        )?;
+        if filename.to_ascii_lowercase().ends_with(".zip") && !extracted_state {
             let mut archive = ZipArchive::new(File::open(&object)?)
                 .map_err(|e| CoreError::Archive(e.to_string()))?;
             let entries =
@@ -536,6 +541,41 @@ impl Service {
                 hash: expected,
                 source_file_id: selection.file_ids[0].clone(),
             });
+        } else if extracted_state {
+            let extracted: String = conn.query_row(
+                "SELECT extracted_path FROM package_versions WHERE id=?1",
+                [&selection.version_id],
+                |r| r.get(0),
+            )?;
+            let extracted = PathBuf::from(extracted);
+            if fs::symlink_metadata(&extracted)?.file_type().is_symlink() {
+                return Err(CoreError::Invalid("OBJECT_STORE_CORRUPT"));
+            }
+            for id in &selection.file_ids {
+                let (relative,hash): (String,String) = conn.query_row("SELECT relative_path,content_hash FROM package_files WHERE version_id=?1 AND id=?2 AND kind='unitypackage'",params![selection.version_id,id],|r|Ok((r.get(0)?,r.get(1)?)))?;
+                let relative = safe_member_path(&relative)?;
+                let mut source = extracted.clone();
+                for part in relative.components() {
+                    source.push(part);
+                    if fs::symlink_metadata(&source)?.file_type().is_symlink() {
+                        return Err(CoreError::Invalid("OBJECT_STORE_CORRUPT"));
+                    }
+                }
+                if fs::symlink_metadata(&source)?.file_type().is_symlink() {
+                    return Err(CoreError::Invalid("OBJECT_STORE_CORRUPT"));
+                }
+                let target = root.join(format!("{}.unitypackage", Uuid::new_v4()));
+                atomic_copy(&source, &target, &hash)?;
+                originals.insert(source, hash.clone());
+                result.push(StagedPackage {
+                    file: UnityImportFile {
+                        operation_id: Uuid::new_v4().to_string(),
+                        path: fs::canonicalize(target)?,
+                    },
+                    hash,
+                    source_file_id: id.clone(),
+                });
+            }
         } else {
             return Err(CoreError::Invalid("EXTRACTION_UNSUPPORTED"));
         }
@@ -543,6 +583,13 @@ impl Service {
     }
 
     pub fn build_install_plan(&self, input: BuildInstallPlanInput) -> CoreResult<InstallPlan> {
+        let _library_lock = self.library_access(false)?;
+        for selection in &input.selections {
+            self.require_version_visible(&selection.version_id)?;
+        }
+        for id in &input.remove_package_ids {
+            self.require_item_visible(id)?;
+        }
         let conn = self.connect()?;
         let _lock = self.installation_lock(&input.project_id)?;
         no_busy(&conn, &input.project_id)?;
@@ -604,6 +651,9 @@ impl Service {
         }
         // Same selection for an unaffected package must not silently re-import it.
         affected = operations.iter().map(|o| o.package_id.clone()).collect();
+        for id in desired.keys() {
+            self.require_item_visible(id)?;
+        }
         let order = dependency_order(&conn, &desired)?;
         let id = Uuid::new_v4().to_string();
         let root = self.app_data_dir.join("install-staging").join(&id);
@@ -826,6 +876,9 @@ impl Service {
         let desired = desired_state(&conn, project_id)?;
         let mut packages = Vec::new();
         for (package_id, selection) in desired {
+            if self.require_item_visible(&package_id).is_err() {
+                continue;
+            }
             let (title,date,hash): (String,String,String) = conn.query_row("SELECT p.title,v.version_date,v.content_hash FROM packages p JOIN package_versions v ON v.package_id=p.id WHERE v.id=?1", [&selection.version_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
             packages.push(InstalledPackage {
                 package_id,
@@ -847,6 +900,7 @@ impl Service {
         input: InstallItemInput,
         unity: &dyn UnityGateway,
     ) -> CoreResult<InstallationJob> {
+        let _library_lock = self.library_access(false)?;
         if input.idempotency_key.is_empty() || input.idempotency_key.len() > 128 {
             return Err(CoreError::Invalid("INVALID_IDEMPOTENCY_KEY"));
         }
@@ -880,6 +934,9 @@ impl Service {
             .optional()?
             .ok_or(CoreError::Invalid("PLAN_STALE"))?;
         let stored: StoredPlan = decode(&payload)?;
+        for id in stored.affected.iter().chain(stored.desired.keys()) {
+            self.require_item_visible(id)?;
+        }
         let project = self.installation_project(&conn, &input.project_id)?;
         if project != stored.project_path
             || base_hash(&conn, &input.project_id, &project, &scan_project(&project)?)?
@@ -991,6 +1048,7 @@ impl Service {
         job_id: &str,
         unity: &dyn UnityGateway,
     ) -> CoreResult<InstallationJob> {
+        let _library_lock = self.library_access(false)?;
         let conn = self.connect()?;
         let job = load_job(&conn, job_id)?;
         let _lock = self.installation_lock(&job.project_id)?;
@@ -1121,6 +1179,7 @@ impl Service {
         mode: RecoveryMode,
         unity: &dyn UnityGateway,
     ) -> CoreResult<RecoveryReport> {
+        let _library_lock = self.library_access(false)?;
         let conn = self.connect()?;
         let job = load_job(&conn, job_id)?;
         let _lock = self.installation_lock(&job.project_id)?;
@@ -1129,6 +1188,9 @@ impl Service {
             return Err(CoreError::Invalid("RECOVERY_NOT_REQUIRED"));
         }
         let journal = load_journal(&conn, job_id)?;
+        for id in &journal.plan.affected {
+            self.require_item_visible(id)?;
+        }
         let project = &journal.plan.project_path;
         self.installation_project(&conn, &job.project_id)?;
         let mut conflicts = Vec::new();

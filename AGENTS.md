@@ -1,6 +1,6 @@
 # エージェント向け引き継ぎ
 
-作業前にルートの README.md と design-review/README.md を読む。最新のユーザー指示が優先する。
+作業前にルートの README.md、docs/development-handoff.md、design-review/README.md を読む。最新のユーザー指示が優先する。
 
 ## 2026-10-27 の継続ルール
 

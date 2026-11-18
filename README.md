@@ -1,111 +1,118 @@
+<p align="center">
+  <img src="desktop/public/brand/app-icon.svg" alt="omnooth" width="96" height="96">
+</p>
+
 # omnooth
 
-2026-10-27 に本体の開発を開始した。Tauri / React の本体、Rust の原本保存・ローカル取り込み・プロジェクト登録、BOOTH ダウンロードとライブラリ登録、独立した Unity アダプターを追加した。BOOTH の実ファイル検証は進行中で完了未確認。2026-11-17 に Unity 適用の計画・競合検査・バックアップ・実ファイル照合・実績確定・復旧を接続した。実商品と他 OS の追加検証は継続する。起動方法と制約は [本体の開発資料](desktop/README.md)、作業状況は [実装計画](docs/implementation-plan.md) と [BOOTH 検証記録](docs/booth-import-validation.md) を参照する。
+**BOOTH で入手した Unity 向けアセットを、原本の保存からプロジェクトへの適用まで管理するデスクトップアプリです。**
 
-次のセッションでは、まずこの README、[レビューアプリの開発資料](design-review/README.md)、`design-review/data/catalog.mjs` を読む。ここに記録した最新のユーザー指示を、過去の仕様・レビュー返信より優先する。
+配布ファイルをローカルのライブラリに保存し、版ごとに整理します。配布物に含まれる `unitypackage` を選び、変更内容を確認してから既存の Unity プロジェクトへ適用できます。
 
-## 最新の指示と今回の範囲
+[操作ガイド](docs/unity-installation.md) · [リリース](https://github.com/tukiminya/omnooth/releases) · [不具合報告](https://github.com/tukiminya/omnooth/issues) · [Apache License 2.0](LICENSE)
 
-- **Figma は最新の継続指示に従い、ツール・plugin・Computer 経由で操作しない。** 2026-10-27 の開発開始時に参照して同梱した本体アセットを使い、古い編集記録は再実行しない。
-- レビュー画面のモックと古い参照画像は削除した。復元・再生成しない。以前の Figma 編集記録は履歴であり、現在の画面デザインの正本ではない。本体の新規 UI とローカルアセットは `desktop/` に分離した。
-- **Unity に適用する単位は `.unitypackage` のみ。** 配布 ZIP 等の中から、適用する unitypackage を個別に選ぶ。複数件の順序を扱う。
-- ZIP は未展開でも収録パスを確認・検索し、unitypackage を選択できる。インポート時は選択分だけを一時展開し、一致する全件成功を確認した後に一時ファイルを削除する。原本 ZIP は保持する。[実装範囲](docs/zip-import.md) を参照する。本体の適用と接続済み。[Unity 適用](docs/unity-installation.md) を参照する。
-- **PNG / PSD などの直接追加は対象外。** ファイルの直接コピー、専用配置先、PSD 変換・編集、Material への自動割当を実装しない。unitypackage の内部に含まれるテクスチャ等は通常のインポート対象。
-- **インポート先パスの変更は対象外。** unitypackage が定義する Assets パスを使う。配置テンプレート、パスのリマップ、`MoveAsset`、元の配置へ戻す操作を実装しない。ライブラリ保存先の変更は別の設定であり、残す。
-- 生成 AI に関する機能・クラウド API は対象外。以前の Cloudflare / Hono / AI SDK / Haiku 案を再導入しない。
-- 2026-10-27 の次の依頼で開発開始が許可された。詳細作業を GPT-6 Luna のサブエージェントへ委任し、主担当が統合と検証を行う。
-- application ID は `dev.tuki.omnooth`。BOOTH Deep Link を受信し、重複をまとめる永続 FIFO でダウンロード・メタデータ取得・ライブラリ登録する処理を追加した。ライブラリ保存先と展開設定は受信時に固定する。署名 URL はメモリーだけに保持し、再起動時の未完了ジョブは新しいリンクを待つ。2026-10-28 に Firefox からエクの約1.19 GBの実ファイルを受信し、原本・商品・版の登録と、再受信時の重複防止を確認した。[確認範囲と制約](docs/booth-import-validation.md) を参照する。
-- 一般／バージョン履歴は明示的なタブで切り替える。連携専用画面は現時点では置かず、マニュアルは `https://omnooth.tuki.dev/docs` を開く。
-- アプリアイコンは指定された Figma の `127:1137` を同梱し、配布用 PNG / ICO / ICNS に反映した。画面内の汎用アイコンは `lucide-react` を使い、Figma から書き出した汎用 SVG は使わない。
-- `main` への push で Windows / macOS（Apple Silicon）/ Linux のインストーラーをビルドし、全件成功後に GitHub Release の下書きを作る。[配布手順と制約](docs/releases.md) を参照する。
+> 現在開発中で、公開インストーラーの提供前です。動作を試す場合は [ソースから起動する](#ソースから起動する) を参照してください。macOS（Apple Silicon）/ Unity 2022.3.22f1 での実機検証を進めており、Windows / Linux での実動作確認は継続中です。確認済みの範囲と残る制約は [検証記録](docs/implementation-validation.md) を参照してください。
 
-現行の設計カタログは `2026-10-27.2`。削除した設計項目は `archivedSpecs` に本文を持たない履歴用レコードだけを残している。SQLite にある過去の発言・承認を消さない。通常の承認は利用者が行う。2026-10-27 の明示的なオートレビュー依頼では、対象と根拠を記録したうえで委任された項目を承認する。以後の自動承認を包括的に許可するものではない。
+## 主な機能
 
-## リポジトリにあるもの
+- **BOOTH からの取り込み** — BOOTH Library Manager 形式のリンクを受信し、順番にダウンロードして商品情報とともに登録します。同じファイルの重複受信をまとめます。
+- **原本と版の管理** — 原本を SHA-256 で識別し、版を `YYYY-MM-DD@ハッシュ先頭8文字` で表示します。同じ内容の再取り込みでは既存の版を再利用します。
+- **圧縮ファイルへの対応** — ZIP / 7z / RAR / tar / tar.gz / tar.bz2 / tar.xz と別名拡張子に対応します。ZIP / 7z / RAR のパスワードは展開時だけ使用します。
+- **unitypackage の明示選択** — 配布物に含まれる複数の `unitypackage` を個別に選び、適用順を指定できます。ZIP は全体を展開せずに内容を確認・選択できます。
+- **確認してから Unity へ適用** — 変更予定とパス・GUID の競合を確認し、適用後の実ファイルを照合します。バックアップ、適用履歴、失敗時の復旧にも対応します。
+- **共通カスタムと依存管理** — 用意済みの改変済み `unitypackage` と、完全一致の版を指定した必須依存を保存できます。作成・編集はプロジェクト未選択でも行えます。
+- **商品情報と検索** — 商品情報・タグ・お気に入りを編集し、キーワードやショップ・カテゴリなどの条件を組み合わせて検索できます。
+- **表示と保存先の設定** — 日本語・英語・韓国語、ライブラリ保存先、展開設定、確認付きの旧版整理を利用できます。macOS / Windows では OS 認証による非表示アイテムの解除を扱います。
 
-| パス | 状態と役割 |
-| --- | --- |
-| `desktop/` | Tauri 2 + React / TypeScript 本体。設定、ローカル取り込み、BOOTH 受信・ダウンロード・登録・ログ表示 |
-| `crates/omnooth-core/` | 本体用 SQLite、原本保存庫、プロジェクト検証、共有 command dispatcher |
-| `crates/omnooth-unity/` / `unity/` | 本体に接続した Unity アダプター。2022.3 の小さなテキスト fixture で実インポートを確認 |
-| `design-review/` | 実行可能な React / Vite + Node の設計レビューアプリ |
-| `design-review/data/catalog.mjs` | 要件、関数契約、将来の DB、根拠、フローの本文 |
-| `design-review/src/domain/package-version.ts` | 日付と SHA-256 による版識別の参照実装。テスト済み |
-| `design-review/src/domain/booth-metadata.ts` | BOOTH JSON の検証・DTO 変換・ファイル更新日時照合の参照実装 |
-| `design-review/src/domain/library-content.ts` | unitypackage の列挙・明示選択・順序・入力検証の参照実装 |
-| `design-review/server/store.mjs` | **レビュー用** SQLite。comments / decisions の保存と改訂検知 |
-| `design-review/data/reviews.sqlite` | レビューの正本。Git 対象外。同じワークスペースで継続する |
-| `design-review/data/review-snapshot.json` | 自動書き出し。Git 対象外 |
-| `design-review/data/figma-changes-2026-10-23.json` | 過去の操作記録。現在のデザインへの再適用は禁止 |
-| `dist/omnooth` | 作業開始前からあるバイナリ。上書き・削除しない。現在の設計が実装済みという根拠にしない |
-
-`catalog.mjs` の関数は TypeScript 表記の**契約**であり、その名前の Rust 実装が既にあるわけではない。ER 図の17テーブルは本体用の設計で、レビュー DB にマイグレーション済みではない。レビューアプリも本体の製品 UI ではない。本体の ja / en / ko 対応と、現在の日本語のレビュー UI も区別する。
-
-## 確定した本体の設計
-
-### 構成
-
-Tauri 2 + React / TypeScript、ローカル処理は Rust。GUI・Deep Link・ブラウザ / Unity 拡張の標準入出力アダプターは、同じコマンド DTO と application service を使う。検証・キュー・DB・権限判定を入口ごとに複製しない。キューと DB の所有者は単一起動の本体。
-
-GUI と Rust のローカル取り込みに加え、BOOTH の受信から原本登録までの初期経路を接続した。署名 URL の OS 資格情報暗号化、期限内自動再開、外部拡張は後続。Unity 適用は確認済み計画から実ファイル照合・DB 確定まで接続済み。
+## 利用の流れ
 
 ```mermaid
 flowchart LR
-    GUI["React GUI"] --> APP["Rust 共通ユースケース"]
-    EXT["Deep Link / 標準入出力"] --> APP
-    APP --> LOCAL["SQLite / 原本保存庫"]
-    APP --> BOOTH["BOOTH 公開商品 API"]
-    APP --> UNITY["Unity Editor アダプター"]
+    A["BOOTH のリンク / ローカルファイル"] --> B["原本をライブラリに保存"]
+    B --> C["版・unitypackage・適用順を選択"]
+    C --> D["変更内容と競合を確認"]
+    D --> E["Unity へ適用・結果を照合"]
 ```
 
-本体用 SQLite はメタデータ、原本は SHA-256 による保存庫で管理する。初期実装は `appData/omnooth.sqlite`、`Library/objects/<sha256>` と展開内容を保存する。適用用 staging / backups、ジョブと計画、所有台帳は追加済み。共通カスタム等の全17テーブルが完成した段階ではない。Rust の初期マイグレーションと GUI の IPC は追加済み。
+1. VCC / ALCOM などで作成し、Unity で初回起動を済ませた既存プロジェクトを登録します。
+2. ローカルの配布ファイルを追加するか、BOOTH のダウンロードリンクを開いてライブラリへ取り込みます。リンクを使う場合は、一般設定から「BOOTH リンクの受信先に設定」を実行してください。
+3. 版と適用する `unitypackage` を選び、順番を決めます。
+4. 対象プロジェクトを Unity で開きます。初回は確認画面から Unity アダプターを導入し、変更予定を確認して適用します。
 
-### 取り込みと適用
+詳しい操作は [Unity への適用](docs/unity-installation.md) を参照してください。配布状況は [GitHub Releases](https://github.com/tukiminya/omnooth/releases) から確認できます。
 
-- `booth-library-manager://item-import` を起動時・実行中に受信し、永続 FIFO キューへ入れる。ジョブごとに `libraryPath` と `extractArchives` を受付時に固定して、ダウンロード、公開メタデータ取得、原本・ライブラリ登録を順に行う。同時に処理するジョブは1件。
-- `dlurl` は署名付き URL。`downloadable_filename`、`item_id`、任意の `variation_id` と `order_id` を読み、空の `order_id` は null にする。署名 URL やパスワードを資料・ログへ残さない。
-- 同じ `sourceIdentity` の重複受信は既存ジョブへまとめる。成功済みの再受信は保存済み結果を返し、再ダウンロードしない。失敗・期限切れは新しい Deep Link を待ち、同じジョブ ID と初回設定を使って再開する。再起動後の未完了ジョブも `awaitingUrl` として新しいリンクを待つ。
-- 署名付き `dlurl` と `order_id` はメモリー内の parsed request にだけ保持する。キュー JSON には安全な receipt、ID、受付時設定、状態、エラーコード、ローカル ID のみを保存する。OS 資格情報による暗号化と URL 有効期限内の自動再開は未実装。
-- ZIP / 7z / RAR / tar / tar.gz・tgz / tar.bz2・tbz2 / tar.xz・txz が取り込み対象。形式・暗号方式の実ファイル検証は未実施。libarchive は候補で、まだ組み込んでいない。
-- 圧縮ファイルの展開は設定に依存する。初期案は OFF。受付時にジョブへ設定をコピーし、以後の設定変更で受付済みジョブを変えない。OFF は原本保存だけで完了。後から明示的に展開できる。
-- **ライブラリ登録の成功と Unity 適用の成功は別。** 展開済みでも unitypackage がなければ適用不可。その他の収録物は原本を失わず、直接適用はしない。
-- 配布原本の版と、その中の unitypackage の選択を分ける。全件を勝手に選ばず、PC / Quest の文字から依存や排他を推測しない。unitypackage 内部の部分選択は初版の対象外。
-- Unity プロジェクトは VCC / ALCOM 等で作成し、初回起動済みの既存フォルダーを登録する。Assets がない場合は拒否する。本体はプロジェクトを作成しない。
-- 計画で追加・削除・更新を確認する。パッケージ全体の削除は `removePackageIds` で明示し、空選択や部分更新と区別する。保持するパッケージの依存も含めて検証する。`installItem` は確認した planHash を実行する。依存を先にし、選択した unitypackage を明示順に `AssetDatabase.ImportPackage(path, false)` へ渡す設計。完了・失敗・中断と実ファイルを照合してから DB・通知を確定する。
-- パス・GUID の競合は停止して表示する。インポート先を変えて回避しない。所有権は `project_files.source_file_id` まで追跡し、共有する親フォルダーやユーザー変更済みのファイルを一括削除しない。
-- 選択・所有台帳は所属を保証する複合 FK と参照用 UNIQUE を持ち、一括更新に必要な FK は COMMIT 時に検証する。失敗時の `recoverInstallation` とバックアップ照合は残す。対象外にした「元の配置へ戻す」という移動設定の復帰機能とは別。
+## データの扱いと動作範囲
 
-### 版名・カスタム・表示
+- 原本と管理データはローカルに保存します。BOOTH からのダウンロードと公開商品情報の取得にはネットワーク接続を使用します。
+- Unity へ適用する単位は `unitypackage` です。PNG / PSD などの直接追加や、パッケージが定義する `Assets` パスの変更は扱いません。
+- ライブラリへの登録と Unity への適用は別の操作です。保存・展開だけではプロジェクトを変更しません。
+- 非表示機能はアプリ内の表示を隠します。保存ファイルは暗号化されず、Finder やエクスプローラーから閲覧できます。Linux では非表示の操作を表示しません。
+- BOOTH の署名付きダウンロード URL は、OS 資格情報で保護した鍵を使って暗号化します。再起動後に安全な再開を確認できない場合は、新しいリンクを待ちます。
 
-- 全ての版を `YYYY-MM-DD@sha先頭8文字` で表示し、内部識別には SHA-256 全長を使う。元名が `v1_3_0` / `ver1.01` 等でも版名を抽出しない。認識設定と版名の手入力を設けず、共通カスタムにも同じ規則を使う。版の日付は `package_versions.version_date` に保存し、同一内容の再取り込みでは初回の版を再利用する。
-- 日付は variation ID と元ファイル名が一意に一致した BOOTH `downloadables.updated_at`、取れなければ取り込み日時の UTC 日付。商品の `published_at` をファイル更新日時へ流用しない。
-- 共通カスタムは、ユーザーが用意した改変済み unitypackage と完全一致の必須依存を保存する。アプリ内の unitypackage 作成や素材の直接追加はしない。作成・編集・保存に projectId を要求せず、Unity への適用だけをプロジェクト選択後に行う。
-- 表示上の親と必須依存は別。循環・欠損・同じ論理パッケージの版衝突を検出する。複数の unitypackage を含む必須依存でも暗黙に全件を適用しない。
-- 本体は ja / en / ko。i18next による3言語の画面と保存済み言語の復元は初期実装済み。OS ロケールを本体の初回設定へ渡す処理は後続。目標は保存済み言語を OS より優先し、地域コードを正規化して未対応時は ja。
-- 検索は空白 OR、`&&` AND を優先。`shop:` / `category:` / `tag:` / `is:starred` / `age:` 等を扱う。可視性条件は検索式全体の外側に AND でかける。
-- 非表示機能は UI だけを隠し、ライブラリ原本を暗号化しない。初回に3言語で説明し了承を保存する。Unlock は macOS / Windows の OS 認証。Linux は操作を表示しない。署名 URL の保護は、この非表示機能とは別の処理。
-- 初版の配布でコード署名・notarization を必須にしない。将来対応の設計。クラウド同期・アカウント・自動購入も初版の対象外。
+## ソースから起動する
 
-## 続く実装の順序
+### 必要な環境
 
-1. この文書、本体 README、レビューアプリ README、カタログと保存済みレビューを読む。削除した機能を戻さず、Figma は操作しない。
-2. BOOTH の実ファイル検証と再起動後の新リンク再開を確認する。署名 URL の保護、メタデータ取得・登録の実データ確認、アプリ表示の最終目視を記録する。
-3. Unity 2022.3.22f1 のテキスト fixture は実機検証済み。既存 Unity プロジェクトで実商品・Prefab / Material・ドメインリロードの追加検証を続ける。Unity の対象バージョンは登録プロジェクトから読む。
-4. Unity 適用の初期接続は完了。[実装範囲と制約](docs/unity-installation.md) を確認し、他 OS・依存編集 UI・外部拡張と追加検証を続ける。
-
-Unity アダプターの通信・導入と内部マニフェスト解析は本体に接続し、テストと小さな実インポートを確認した。展開ライブラリの OS / 暗号方式対応、デスクトップ OS 認証は未検証。テスト済みと扱わず、実装の境界ごとに確認する。特に Tauri の公式 Biometric を macOS / Windows 用と決めつけない。
-
-公開 BOOTH API は 2026-10-22 に商品 7328764 / 8596249 の HTTP 200 と実フィールドを確認済み。縮小フィクスチャを保存した。全商品・認証付き取得・サービスの安定性を検証したわけではない。
-
-## レビューアプリの起動・検証
-
-Node.js 24 と pnpm を使う。依存導入や開発用ポート、レビューの読み方、Node による代替コマンドは [design-review/README.md](design-review/README.md) に記載。
+- Node.js 24
+- pnpm 12.3.4
+- Rust と [OS ごとの Tauri 2 開発環境](https://v2.tauri.app/start/prerequisites/)
+- 適用先プロジェクトに対応する Unity Editor
 
 ```sh
-pnpm --dir design-review install
-pnpm dev
-pnpm test
-pnpm build
+git clone https://github.com/tukiminya/omnooth.git
+cd omnooth
+pnpm install --frozen-lockfile
+pnpm app:dev
 ```
 
-開発画面は <http://127.0.0.1:4310/>、API は 4311。ビルド済み画面は `pnpm start` で 4310 に配信する。手元の変更は未コミットなので、既存作業を消す `git reset` / `git clean` やレビュー DB の初期化を行わない。
+### 検証とビルド
+
+```sh
+# TypeScript の型チェックとフロントエンドのビルド
+pnpm app:check
+
+# Rust のテスト
+pnpm app:test
+
+# 画面テスト（初回は Chromium をインストール）
+pnpm --dir desktop exec playwright install chromium
+pnpm --dir desktop test
+
+# 本体のビルド（インストーラーは生成しません）
+pnpm app:build
+```
+
+OS ごとの注意点や起動オプションは [本体の開発資料](desktop/README.md) を参照してください。
+
+## ドキュメントと構成
+
+| 資料 | 内容 |
+| --- | --- |
+| [Web マニュアル（準備中）](https://omnooth.tuki.dev/docs) | 利用者向けの操作案内を整備予定 |
+| [本体の開発資料](desktop/README.md) | 開発環境、起動方法、実装の制約 |
+| [Unity への適用](docs/unity-installation.md) | アダプターの導入、適用・復旧の仕組み |
+| [実装計画](docs/implementation-plan.md)・[検証記録](docs/implementation-validation.md) | 現在の実装範囲と確認状況 |
+| [配布手順](docs/releases.md) | OS ごとのビルドとリリースの流れ |
+| [開発の引き継ぎ](docs/development-handoff.md) | 確定仕様、継続作業の注意点 |
+
+| パス | 役割 |
+| --- | --- |
+| `desktop/` | Tauri 2 + React / TypeScript のデスクトップ本体 |
+| `crates/omnooth-core/` | Rust の共通処理、SQLite、原本保存、適用計画 |
+| `crates/omnooth-unity/`・`unity/` | Unity Editor との通信と適用用アダプター |
+| `design-review/` | 要件・設計・レビューを管理する開発用アプリ |
+
+開発時の作業ルールは [AGENTS.md](AGENTS.md)、設計レビューアプリの起動方法は [design-review/README.md](design-review/README.md) に記載しています。
+
+## 不具合報告
+
+[GitHub Issues](https://github.com/tukiminya/omnooth/issues) に、アプリ・OS・Unity のバージョン、再現手順、期待した動作を記載してください。ログを添付する場合は、署名付き URL・注文 ID・パスワードなどの機密情報を除いてください。
+
+## ライセンス
+
+omnooth のソースコードは **[Apache License 2.0](LICENSE)** で公開しています。
+
+同梱フォントや第三者のコード・テストデータには、それぞれのライセンスが適用されます。[同梱ライセンス](desktop/public/licenses/) と [テストデータの出典・ライセンス](crates/omnooth-core/tests/fixtures/README.md) を参照してください。BOOTH などから取り込む配布物は、各作者の利用規約・ライセンスに従って利用してください。
+
+---
+
+omnooth は BOOTH を運営するピクシブ株式会社とは関係のない、非公式のツールです。

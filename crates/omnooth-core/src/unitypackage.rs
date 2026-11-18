@@ -271,3 +271,16 @@ fn validate_pax_metadata(bytes: &[u8]) -> CoreResult<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod external_validation {
+    #[test]
+    #[ignore = "Read-only validation of a local unitypackage supplied through OMNOOTH_TEST_PACKAGE"]
+    fn inspect_external_package_without_executing_editor_code() {
+        let path =
+            std::env::var_os("OMNOOTH_TEST_PACKAGE").expect("OMNOOTH_TEST_PACKAGE is required");
+        let assets = super::inspect(std::path::Path::new(&path)).unwrap();
+        println!("Verified {} internal asset records", assets.len());
+        assert!(!assets.is_empty());
+    }
+}

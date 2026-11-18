@@ -1,0 +1,110 @@
+# 開発の引き継ぎ
+
+公開向けの概要と導入案内は [ルート README](../README.md)、作業時のルールは [AGENTS.md](../AGENTS.md) を参照する。この資料は実装の境界・確定仕様・継続時の注意を保存する。コード表記のパスは、特記がない限りリポジトリルートからの相対パス。
+
+2026-10-27 に本体の開発を開始した。2026-11-17 に Unity 適用の計画・競合検査・バックアップ・実ファイル照合・実績確定・復旧を接続した。2026-11-18 は外部拡張と配布を除く残機能として、OS 言語、商品情報と詳細検索、共通カスタム・依存編集、非表示と OS 認証、署名 URL の暗号化・再開、主要圧縮形式とパスワード入力、確認付きの安全な整理を追加した。各ステップを個別コミットし、全検証後にまとめて push した。起動方法と制約は [本体の開発資料](../desktop/README.md)、状況は [実装計画](implementation-plan.md) と [検証記録](implementation-validation.md) を参照する。
+
+次のセッションでは、まずルート README、この資料、[レビューアプリの開発資料](../design-review/README.md)、`design-review/data/catalog.mjs` を読む。この資料に記録したユーザー指示を、過去の仕様・レビュー返信より優先する。
+
+## 最新の指示と今回の範囲
+
+- **Figma は最新の継続指示に従い、ツール・plugin・Computer 経由で操作しない。** 2026-10-27 の開発開始時に参照して同梱した本体アセットを使い、古い編集記録は再実行しない。
+- レビュー画面のモックと古い参照画像は削除した。復元・再生成しない。以前の Figma 編集記録は履歴であり、現在の画面デザインの正本ではない。本体の新規 UI とローカルアセットは `desktop/` に分離した。
+- **Unity に適用する単位は `.unitypackage` のみ。** 配布 ZIP 等の中から、適用する unitypackage を個別に選ぶ。複数件の順序を扱う。
+- ZIP は未展開でも収録パスを確認・検索し、unitypackage を選択できる。インポート時は選択分だけを一時展開し、一致する全件成功を確認した後に一時ファイルを削除する。原本 ZIP は保持する。[実装範囲](zip-import.md) を参照する。本体の適用と接続済み。[Unity 適用](unity-installation.md) を参照する。
+- **PNG / PSD などの直接追加は対象外。** ファイルの直接コピー、専用配置先、PSD 変換・編集、Material への自動割当を実装しない。unitypackage の内部に含まれるテクスチャ等は通常のインポート対象。
+- **インポート先パスの変更は対象外。** unitypackage が定義する Assets パスを使う。配置テンプレート、パスのリマップ、`MoveAsset`、元の配置へ戻す操作を実装しない。ライブラリ保存先の変更は別の設定であり、残す。
+- 生成 AI に関する機能・クラウド API は対象外。以前の Cloudflare / Hono / AI SDK / Haiku 案を再導入しない。
+- 2026-10-27 の次の依頼で開発開始が許可された。詳細作業を GPT-6 Luna のサブエージェントへ委任し、主担当が統合と検証を行う。
+- application ID は `dev.tuki.omnooth`。BOOTH Deep Link を受信し、重複をまとめる永続 FIFO でダウンロード・メタデータ取得・ライブラリ登録する処理を追加した。ライブラリ保存先と展開設定は受信時に固定する。署名 URL はキュー JSON に含めず、OS 資格情報の鍵で別に暗号化する。期限を再検証できるジョブは再起動後も同じ ID と初回設定で再開し、それ以外は新しいリンクを待つ。2026-10-28 に Firefox からエクの約1.19 GBの実ファイルを受信し、原本・商品・版の登録と、再受信時の重複防止を確認した。[確認範囲と制約](booth-import-validation.md) を参照する。
+- 一般／バージョン履歴は明示的なタブで切り替える。連携専用画面は現時点では置かず、マニュアルは `https://omnooth.tuki.dev/docs` を開く。
+- アプリアイコンは指定された Figma の `127:1137` を同梱し、配布用 PNG / ICO / ICNS に反映した。画面内の汎用アイコンは `lucide-react` を使い、Figma から書き出した汎用 SVG は使わない。
+- `main` への push で Windows / macOS（Apple Silicon）/ Linux のインストーラーをビルドし、全件成功後に GitHub Release の下書きを作る。[配布手順と制約](releases.md) を参照する。
+
+現行の設計カタログは `2026-10-27.2`。削除した設計項目は `archivedSpecs` に本文を持たない履歴用レコードだけを残している。SQLite にある過去の発言・承認を消さない。通常の承認は利用者が行う。2026-10-27 の明示的なオートレビュー依頼では、対象と根拠を記録したうえで委任された項目を承認する。以後の自動承認を包括的に許可するものではない。
+
+## リポジトリにあるもの
+
+| パス | 状態と役割 |
+| --- | --- |
+| `desktop/` | Tauri 2 + React / TypeScript 本体。設定、ローカル取り込み、BOOTH 受信・ダウンロード・登録・ログ表示 |
+| `crates/omnooth-core/` | 本体用 SQLite、原本保存庫、プロジェクト検証、共有 command dispatcher |
+| `crates/omnooth-unity/` / `unity/` | 本体に接続した Unity アダプター。2022.3 の小さなテキスト fixture で実インポートを確認 |
+| `design-review/` | 実行可能な React / Vite + Node の設計レビューアプリ |
+| `design-review/data/catalog.mjs` | 要件、関数契約、将来の DB、根拠、フローの本文 |
+| `design-review/src/domain/package-version.ts` | 日付と SHA-256 による版識別の参照実装。テスト済み |
+| `design-review/src/domain/booth-metadata.ts` | BOOTH JSON の検証・DTO 変換・ファイル更新日時照合の参照実装 |
+| `design-review/src/domain/library-content.ts` | unitypackage の列挙・明示選択・順序・入力検証の参照実装 |
+| `design-review/server/store.mjs` | **レビュー用** SQLite。comments / decisions の保存と改訂検知 |
+| `design-review/data/reviews.sqlite` | レビューの正本。Git 対象外。同じワークスペースで継続する |
+| `design-review/data/review-snapshot.json` | 自動書き出し。Git 対象外 |
+| `design-review/data/figma-changes-2026-10-23.json` | 過去の操作記録。現在のデザインへの再適用は禁止 |
+| `dist/omnooth` | 作業開始前からあるバイナリ。上書き・削除しない。現在の設計が実装済みという根拠にしない |
+
+`catalog.mjs` の関数は TypeScript 表記の**契約**であり、その名前の Rust 実装が既にあるわけではない。ER 図の17テーブルは本体用の設計で、レビュー DB にマイグレーション済みではない。レビューアプリも本体の製品 UI ではない。本体の ja / en / ko 対応と、現在の日本語のレビュー UI も区別する。
+
+## 確定した本体の設計
+
+### 構成
+
+Tauri 2 + React / TypeScript、ローカル処理は Rust。GUI・Deep Link・ブラウザ / Unity 拡張の標準入出力アダプターは、同じコマンド DTO と application service を使う。検証・キュー・DB・権限判定を入口ごとに複製しない。キューと DB の所有者は単一起動の本体。
+
+GUI と Rust のローカル取り込みに加え、BOOTH の受信から原本登録までの初期経路を接続した。署名 URL の暗号化保管と期限内自動再開も接続した。ブラウザ / Unity 拡張の標準入出力は今回の対象外。Unity 適用は確認済み計画から実ファイル照合・DB 確定まで接続済み。
+
+```mermaid
+flowchart LR
+    GUI["React GUI"] --> APP["Rust 共通ユースケース"]
+    EXT["Deep Link / 標準入出力"] --> APP
+    APP --> LOCAL["SQLite / 原本保存庫"]
+    APP --> BOOTH["BOOTH 公開商品 API"]
+    APP --> UNITY["Unity Editor アダプター"]
+```
+
+本体用 SQLite はメタデータ、原本は SHA-256 による保存庫で管理する。初期実装は `appData/omnooth.sqlite`、`Library/objects/<sha256>` と展開内容を保存する。適用用 staging / backups、ジョブと計画、所有台帳は追加済み。共通カスタム等の全17テーブルが完成した段階ではない。Rust の初期マイグレーションと GUI の IPC は追加済み。
+
+### 取り込みと適用
+
+- `booth-library-manager://item-import` を起動時・実行中に受信し、永続 FIFO キューへ入れる。ジョブごとに `libraryPath` と `extractArchives` を受付時に固定して、ダウンロード、公開メタデータ取得、原本・ライブラリ登録を順に行う。同時に処理するジョブは1件。
+- `dlurl` は署名付き URL。`downloadable_filename`、`item_id`、任意の `variation_id` と `order_id` を読み、空の `order_id` は null にする。署名 URL やパスワードを資料・ログへ残さない。
+- 同じ `sourceIdentity` の重複受信は既存ジョブへまとめる。成功済みの再受信は保存済み結果を返し、再ダウンロードしない。失敗・期限切れは新しい Deep Link を待ち、同じジョブ ID と初回設定を使って再開する。再起動後は暗号文の復号・受信情報・期限を検証できたジョブを再開し、それ以外は `awaitingUrl` として新しいリンクを待つ。
+- `order_id` はメモリー内にだけ保持する。署名付き `dlurl` は OS 資格情報の鍵を使って AES-256-GCM で暗号化し、ジョブに結び付けて別保存する。キュー JSON には安全な receipt、ID、受付時設定、状態、エラーコード、ローカル ID のみを保存する。OS 資格情報が利用できない場合や期限を検証できない場合は、新しい Deep Link を待つ。
+- ZIP / 7z / RAR / tar / tar.gz・tgz / tar.bz2・tbz2 / tar.xz・txz の原本保存と安全な展開に対応する。ZIP / 7z / RAR は一時的なパスワード入力を扱う。libarchive はリンクせず、形式ごとのストリームを共通の安全な書き込みへ渡す。全方式・全 OS の検証が済んだという意味ではない。
+- 圧縮ファイルの展開は設定に依存する。初期案は OFF。受付時にジョブへ設定をコピーし、以後の設定変更で受付済みジョブを変えない。OFF は原本保存だけで完了。後から明示的に展開できる。
+- **ライブラリ登録の成功と Unity 適用の成功は別。** 展開済みでも unitypackage がなければ適用不可。その他の収録物は原本を失わず、直接適用はしない。
+- 配布原本の版と、その中の unitypackage の選択を分ける。全件を勝手に選ばず、PC / Quest の文字から依存や排他を推測しない。unitypackage 内部の部分選択は初版の対象外。
+- Unity プロジェクトは VCC / ALCOM 等で作成し、初回起動済みの既存フォルダーを登録する。Assets がない場合は拒否する。本体はプロジェクトを作成しない。
+- 計画で追加・削除・更新を確認する。パッケージ全体の削除は `removePackageIds` で明示し、空選択や部分更新と区別する。保持するパッケージの依存も含めて検証する。`installItem` は確認した planHash を実行する。依存を先にし、選択した unitypackage を明示順に `AssetDatabase.ImportPackage(path, false)` へ渡す設計。完了・失敗・中断と実ファイルを照合してから DB・通知を確定する。
+- パス・GUID の競合は停止して表示する。インポート先を変えて回避しない。所有権は `project_files.source_file_id` まで追跡し、共有する親フォルダーやユーザー変更済みのファイルを一括削除しない。
+- 選択・所有台帳は所属を保証する複合 FK と参照用 UNIQUE を持ち、一括更新に必要な FK は COMMIT 時に検証する。失敗時の `recoverInstallation` とバックアップ照合は残す。対象外にした「元の配置へ戻す」という移動設定の復帰機能とは別。
+
+### 版名・カスタム・表示
+
+- 全ての版を `YYYY-MM-DD@sha先頭8文字` で表示し、内部識別には SHA-256 全長を使う。元名が `v1_3_0` / `ver1.01` 等でも版名を抽出しない。認識設定と版名の手入力を設けず、共通カスタムにも同じ規則を使う。版の日付は `package_versions.version_date` に保存し、同一内容の再取り込みでは初回の版を再利用する。
+- 日付は variation ID と元ファイル名が一意に一致した BOOTH `downloadables.updated_at`、取れなければ取り込み日時の UTC 日付。商品の `published_at` をファイル更新日時へ流用しない。
+- 共通カスタムは、ユーザーが用意した改変済み unitypackage と完全一致の必須依存を保存する。アプリ内の unitypackage 作成や素材の直接追加はしない。作成・編集・保存に projectId を要求せず、Unity への適用だけをプロジェクト選択後に行う。
+- 表示上の親と必須依存は別。循環・欠損・同じ論理パッケージの版衝突を検出する。複数の unitypackage を含む必須依存でも暗黙に全件を適用しない。
+- 本体は ja / en / ko。i18next による3言語の画面、保存済み言語の復元、初回の OS 優先言語の取得を接続した。保存済み言語を OS より優先し、地域コードを正規化して未対応時は ja。
+- 検索は空白 OR、`&&` AND を優先。`shop:` / `category:` / `tag:` / `is:starred` / `age:` 等を扱う。可視性条件は検索式全体の外側に AND でかける。
+- 非表示機能は UI だけを隠し、ライブラリ原本を暗号化しない。初回に3言語で説明し了承を保存する。Unlock は macOS / Windows の OS 認証。Linux は操作を表示しない。署名 URL の保護は、この非表示機能とは別の処理。
+- 初版の配布でコード署名・notarization を必須にしない。将来対応の設計。クラウド同期・アカウント・自動購入も初版の対象外。
+
+## 検証の境界と次の確認
+
+2026-11-18 の依頼範囲の実装は接続済み。詳細は [実装計画](implementation-plan.md) を参照する。macOS Keychain の鍵の保存・再読込・削除と、Unity 2022.3.22f1 のテキスト・Material・Prefab・スクリプトのインポート、参照・GUID・実バイト、ドメインリロード後の完了を確認した。エク338件・霧雨262件の内部アセットを原本のコピーから解析した。
+
+Windows / Linux の実動作、OS 認証の対話操作、VRChat 実商品全体の Unity 適用とドメインリロード途中で強制終了した実復旧は追加確認が必要。実商品の内部解析、模擬 Editor の統合テスト、Unity の自作 fixture の実インポートを区別する。外部拡張と配布は今回変更していない。
+
+公開 BOOTH API は 2026-10-22 に商品 7328764 / 8596249 の HTTP 200 と実フィールドを確認済み。縮小フィクスチャを保存した。全商品・認証付き取得・サービスの安定性を検証したわけではない。
+
+## レビューアプリの起動・検証
+
+Node.js 24 と pnpm を使う。依存導入や開発用ポート、レビューの読み方、Node による代替コマンドは [design-review/README.md](../design-review/README.md) に記載。
+
+```sh
+pnpm --dir design-review install
+pnpm dev
+pnpm test
+pnpm build
+```
+
+開発画面は <http://127.0.0.1:4310/>、API は 4311。ビルド済み画面は `pnpm start` で 4310 に配信する。未コミットの作業と保存済みレビューを保護し、既存作業を消す `git reset` / `git clean` やレビュー DB の初期化を行わない。

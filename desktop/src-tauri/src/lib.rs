@@ -1,7 +1,9 @@
 mod activity_log;
+mod authentication;
 mod booth_import;
 mod deep_link_registration;
 mod import_queue;
+mod request_vault;
 
 use activity_log::{ActivityLog, LogLevel, LogSnapshot};
 use booth_import::{DeepLinkStatus, ReceiverState};
@@ -116,7 +118,17 @@ async fn open_manual(app: tauri::AppHandle) -> Result<(), String> {
 
 fn command_name(command: &ApplicationCommand) -> &'static str {
     match command {
+        ApplicationCommand::SaveCustomPackage(_) => "saveCustomPackage",
+        ApplicationCommand::AcknowledgePrivacyNotice => "acknowledgePrivacyNotice",
+        ApplicationCommand::UnlockHiddenItems => "unlockHiddenItems",
+        ApplicationCommand::LockHiddenItems => "lockHiddenItems",
+        ApplicationCommand::SetItemHidden { .. } => "setItemHidden",
+        ApplicationCommand::ExtractArchiveWithPassword { .. } => "extractArchiveWithPassword",
+        ApplicationCommand::BuildCleanupPlan => "buildCleanupPlan",
+        ApplicationCommand::ExecuteCleanup { .. } => "executeCleanup",
         ApplicationCommand::GetSnapshot => "getSnapshot",
+        ApplicationCommand::SearchItems { .. } => "searchItems",
+        ApplicationCommand::UpdateItem { .. } => "updateItem",
         ApplicationCommand::LinkProject { .. } => "linkProject",
         ApplicationCommand::ImportArchive(_) => "importArchive",
         ApplicationCommand::InspectArchive { .. } => "inspectArchive",
@@ -141,7 +153,11 @@ async fn dispatch(
     tauri::async_runtime::spawn_blocking(move || {
         let name = command_name(&command);
         record(&app, LogLevel::Info, name, "処理を開始しました", None);
-        match service.dispatch_with_unity(command, &omnooth_unity::EditorGateway) {
+        match service.dispatch_with_adapters(
+            command,
+            &omnooth_unity::EditorGateway,
+            &authentication::NativeAuthentication(app.clone()),
+        ) {
             Ok(value) => {
                 record(&app, LogLevel::Info, name, "処理が完了しました", None);
                 Ok(value)
@@ -176,6 +192,22 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Focused(false)) {
+                if let Some(backend) = window.app_handle().try_state::<Backend>() {
+                    if !backend
+                        .service
+                        .privacy_state()
+                        .is_ok_and(|state| state.unlocked)
+                    {
+                        return;
+                    }
+                    let _ = backend.service.lock_hidden_items();
+                }
+                use tauri::Emitter;
+                let _ = window.emit("visibility-locked", ());
+            }
+        })
         .setup(|app| {
             let app_data = app.path().app_data_dir()?;
             #[cfg(debug_assertions)]
@@ -190,12 +222,14 @@ pub fn run() {
                 "omnooth 0.1.0 を起動しています",
                 None,
             )?;
+            let os_locales: Vec<String> = sys_locale::get_locales().collect();
             let service_result = if isolated.is_some() {
-                Service::open(data_directory)
+                Service::open_with_locales(data_directory, &os_locales)
             } else {
-                Service::open_migrating_legacy(
+                Service::open_migrating_legacy_with_locales(
                     &app_data,
                     app_data.with_file_name("jp.tukiminya.omnooth"),
+                    &os_locales,
                 )
             };
             let service = match service_result {
@@ -216,13 +250,19 @@ pub fn run() {
                 "ライブラリとデータベースを開きました",
                 None,
             )?;
-            let queue = match ImportQueue::open(data_directory) {
+            let mut queue = match ImportQueue::open(data_directory) {
                 Ok(queue) => queue,
                 Err(error) => {
                     let _ = logs.record(LogLevel::Error, "queue.restore", error.code(), None);
                     return Err(error.into());
                 }
             };
+            match request_vault::RequestVault::open(data_directory) {
+                Ok(vault) => queue.enable_protected_restart(vault)?,
+                Err(code) => {
+                    logs.record(LogLevel::Warn, "queue.protection", code, None)?;
+                }
+            }
             let restored = queue.snapshot();
             logs.record(
                 LogLevel::Info,
@@ -321,6 +361,7 @@ pub fn run() {
                     None,
                 ),
             }
+            booth_import::start_worker(app.handle());
             record(
                 app.handle(),
                 LogLevel::Info,

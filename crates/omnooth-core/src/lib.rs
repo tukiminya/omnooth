@@ -21,15 +21,24 @@ pub use booth_download::{
 };
 pub use deep_link::{parse_item_import_deep_link, ItemImportReceipt, ParsedItemImport};
 mod archive_contents;
+mod archives;
 mod booth_download;
+mod custom;
+mod maintenance;
+mod privacy;
+pub use maintenance::{CleanupPlan, CleanupReport};
+pub use privacy::{AuthenticationGateway, PrivacyState, UnavailableAuthentication};
 mod installation;
+mod library;
+pub use custom::SaveCustomInput;
+pub use library::ItemDetails;
 mod unitypackage;
 pub use archive_contents::{
     ArchiveContents, ArchiveEntry, PreparedUnityImport, PreparedUnityPackage,
 };
 pub use installation::*;
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 10;
 const MAX_ARCHIVE_ENTRIES: usize = 100_000;
 const MAX_EXPANDED_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const MAX_BOOTH_DOWNLOAD_BYTES: u64 = 4 * 1024 * 1024 * 1024;
@@ -86,7 +95,39 @@ impl CoreError {
     }
 }
 
+impl From<serde_json::Error> for CoreError {
+    fn from(_: serde_json::Error) -> Self {
+        Self::Invalid("SERIALIZATION_ERROR")
+    }
+}
+
 pub type CoreResult<T> = Result<T, CoreError>;
+
+pub fn resolve_app_locale(saved: Option<&str>, os_locales: &[String]) -> &'static str {
+    fn supported(value: &str) -> Option<&'static str> {
+        if value.split(['-', '_']).any(|part| {
+            part.is_empty() || part.len() > 8 || !part.chars().all(|c| c.is_ascii_alphanumeric())
+        }) {
+            return None;
+        }
+        match value
+            .split(['-', '_'])
+            .next()?
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "ja" => Some("ja"),
+            "en" => Some("en"),
+            "ko" => Some("ko"),
+            _ => None,
+        }
+    }
+    saved
+        .filter(|value| matches!(*value, "ja" | "en" | "ko"))
+        .and_then(supported)
+        .or_else(|| os_locales.iter().find_map(|value| supported(value)))
+        .unwrap_or("ja")
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -112,6 +153,12 @@ pub struct AppSettings {
 pub struct LibraryItem {
     pub id: String,
     pub title: String,
+    pub booth_item_id: Option<String>,
+    pub details: ItemDetails,
+    pub kind: String,
+    pub is_hidden: bool,
+    pub display_parent_id: Option<String>,
+    pub description: String,
     pub versions: Vec<LibraryVersion>,
 }
 
@@ -125,6 +172,7 @@ pub struct LibraryVersion {
     pub original_filename: String,
     pub state: String,
     pub files: Vec<ImportableFile>,
+    pub required_version_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -143,6 +191,7 @@ pub struct AppSnapshot {
     pub projects: Vec<Project>,
     pub items: Vec<LibraryItem>,
     pub settings: AppSettings,
+    pub privacy: PrivacyState,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,7 +205,7 @@ pub struct ImportArchiveInput {
 }
 
 /// Shared command protocol for Tauri and the future local stdio adapter.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(
     tag = "type",
     content = "input",
@@ -165,17 +214,58 @@ pub struct ImportArchiveInput {
 )]
 pub enum ApplicationCommand {
     GetSnapshot,
-    LinkProject { directory_path: PathBuf },
+    BuildCleanupPlan,
+    ExecuteCleanup {
+        plan_hash: String,
+    },
+    ExtractArchiveWithPassword {
+        version_id: String,
+        password: String,
+    },
+    AcknowledgePrivacyNotice,
+    UnlockHiddenItems,
+    LockHiddenItems,
+    SetItemHidden {
+        item_id: String,
+        hidden: bool,
+    },
+    SaveCustomPackage(SaveCustomInput),
+    SearchItems {
+        query: String,
+    },
+    UpdateItem {
+        item_id: String,
+        title: String,
+        details: ItemDetails,
+    },
+    LinkProject {
+        directory_path: PathBuf,
+    },
     ImportArchive(ImportArchiveInput),
-    InspectArchive { version_id: String },
-    ExtractArchive { version_id: String },
-    UpdateSettings { settings: AppSettings },
+    InspectArchive {
+        version_id: String,
+    },
+    ExtractArchive {
+        version_id: String,
+    },
+    UpdateSettings {
+        settings: AppSettings,
+    },
     BuildInstallPlan(BuildInstallPlanInput),
     InstallItem(InstallItemInput),
-    GetInstallations { project_id: String },
-    PollInstallation { job_id: String },
-    RecoverInstallation { job_id: String, mode: RecoveryMode },
-    SetupUnityAdapter { project_id: String },
+    GetInstallations {
+        project_id: String,
+    },
+    PollInstallation {
+        job_id: String,
+    },
+    RecoverInstallation {
+        job_id: String,
+        mode: RecoveryMode,
+    },
+    SetupUnityAdapter {
+        project_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -190,27 +280,41 @@ pub struct ImportResult {
 pub struct Service {
     db_path: PathBuf,
     app_data_dir: PathBuf,
+    visibility: std::sync::Arc<std::sync::Mutex<Option<(std::time::Instant, String)>>>,
 }
 
 impl Service {
     /// Opens the product database at `<app_data_dir>/omnooth.sqlite` and initializes
     /// the default library at `<app_data_dir>/Library`.
     pub fn open(app_data_dir: impl AsRef<Path>) -> CoreResult<Self> {
+        Self::open_with_locales(app_data_dir, &[])
+    }
+
+    /// OS locale is used only when creating the settings row for the first time.
+    pub fn open_with_locales(
+        app_data_dir: impl AsRef<Path>,
+        os_locales: &[String],
+    ) -> CoreResult<Self> {
         let app_data_dir = app_data_dir.as_ref().to_path_buf();
         fs::create_dir_all(&app_data_dir)?;
         let db_path = app_data_dir.join("omnooth.sqlite");
         let service = Self {
             db_path,
             app_data_dir,
+            visibility: Default::default(),
         };
         let mut conn = service.connect()?;
         migrate(&mut conn)?;
+        {
+            let _maintenance_lock = service.library_access(true)?;
+            service.recover_cleanup(&conn)?;
+        }
         let default_library = service.app_data_dir.join("Library");
         fs::create_dir_all(default_library.join("objects"))?;
         fs::create_dir_all(default_library.join("extracted"))?;
         conn.execute(
-            "INSERT OR IGNORE INTO app_settings(id, language, library_path, extract_archives, keep_old_versions, updated_at) VALUES (1, 'ja', ?1, 0, 1, ?2)",
-            params![default_library.to_string_lossy(), now()],
+            "INSERT OR IGNORE INTO app_settings(id, language, library_path, extract_archives, keep_old_versions, updated_at) VALUES (1, ?1, ?2, 0, 1, ?3)",
+            params![resolve_app_locale(None, os_locales), default_library.to_string_lossy(), now()],
         )?;
         Ok(service)
     }
@@ -223,6 +327,15 @@ impl Service {
     ) -> CoreResult<Self> {
         migrate_legacy_database(&new_app_data_dir, &old_app_data_dir)?;
         Self::open(new_app_data_dir)
+    }
+
+    pub fn open_migrating_legacy_with_locales(
+        new_app_data_dir: impl AsRef<Path>,
+        old_app_data_dir: impl AsRef<Path>,
+        os_locales: &[String],
+    ) -> CoreResult<Self> {
+        migrate_legacy_database(&new_app_data_dir, &old_app_data_dir)?;
+        Self::open_with_locales(new_app_data_dir, os_locales)
     }
 
     /// App-managed staging directory for downloads. No user-controlled path is used.
@@ -243,6 +356,7 @@ impl Service {
         let metadata = title.map(|title| BoothItemMetadata {
             title: Some(title.to_owned()),
             source_updated_at: None,
+            details: ItemDetails::default(),
         });
         self.import_booth_download_with_metadata(
             request,
@@ -305,6 +419,14 @@ impl Service {
             &filename,
             metadata.and_then(|metadata| metadata.title.as_deref()),
         )?;
+        if let Some(metadata) = metadata {
+            let mut details = metadata.details.clone();
+            details.is_starred = self.load_item_by_id(&result.item.id)?.details.is_starred;
+            self.connect()?.execute(
+                "UPDATE packages SET metadata_json=?2 WHERE id=?1",
+                params![result.item.id, serde_json::to_string(&details)?],
+            )?;
+        }
         let _ = fs::remove_file(&downloaded.archive_path);
         Ok(ImportResult {
             item: self.load_item_by_id(&result.item.id)?,
@@ -386,6 +508,7 @@ impl Service {
     }
 
     fn load_item_by_id(&self, id: &str) -> CoreResult<LibraryItem> {
+        self.require_item_visible(id)?;
         let conn = self.connect()?;
         let title = conn.query_row("SELECT title FROM packages WHERE id=?1", [id], |row| {
             row.get(0)
@@ -397,6 +520,18 @@ impl Service {
         let conn = Connection::open(&self.db_path)?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        conn.create_scalar_function(
+            "unicode_fold",
+            1,
+            rusqlite::functions::FunctionFlags::SQLITE_UTF8
+                | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+            |context| {
+                Ok(context
+                    .get::<Option<String>>(0)?
+                    .unwrap_or_default()
+                    .to_lowercase())
+            },
+        )?;
         Ok(conn)
     }
 
@@ -416,20 +551,23 @@ impl Service {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         let mut stmt =
-            conn.prepare("SELECT id,title FROM packages ORDER BY title COLLATE NOCASE,id")?;
+            conn.prepare("SELECT id,title FROM packages WHERE is_hidden=0 OR ?1 ORDER BY title COLLATE NOCASE,id")?;
         let rows = stmt
-            .query_map([], |row| {
+            .query_map([self.privacy_state()?.unlocked], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         let mut items = Vec::with_capacity(rows.len());
         for (id, title) in rows {
-            items.push(load_item(&conn, id, title)?);
+            if self.require_item_visible(&id).is_ok() {
+                items.push(load_item(&conn, id, title)?);
+            }
         }
         Ok(AppSnapshot {
             projects,
             items,
             settings,
+            privacy: self.privacy_state()?,
         })
     }
 
@@ -442,8 +580,50 @@ impl Service {
         command: ApplicationCommand,
         unity: &dyn UnityGateway,
     ) -> CoreResult<serde_json::Value> {
+        self.dispatch_with_adapters(command, unity, &UnavailableAuthentication)
+    }
+
+    pub fn dispatch_with_adapters(
+        &self,
+        command: ApplicationCommand,
+        unity: &dyn UnityGateway,
+        auth: &dyn AuthenticationGateway,
+    ) -> CoreResult<serde_json::Value> {
         match command {
+            ApplicationCommand::AcknowledgePrivacyNotice => {
+                serde_json::to_value(self.acknowledge_privacy_notice()?)
+            }
+            ApplicationCommand::UnlockHiddenItems => {
+                serde_json::to_value(self.unlock_hidden_items(auth)?)
+            }
+            ApplicationCommand::LockHiddenItems => serde_json::to_value(self.lock_hidden_items()?),
+            ApplicationCommand::SetItemHidden { item_id, hidden } => {
+                serde_json::to_value(self.set_item_hidden(&item_id, hidden)?)
+            }
+            ApplicationCommand::SaveCustomPackage(input) => {
+                serde_json::to_value(self.save_custom_package(input)?)
+            }
+            ApplicationCommand::ExtractArchiveWithPassword {
+                version_id,
+                password,
+            } => serde_json::to_value(
+                self.extract_archive_with_password(&version_id, Some(&password))?,
+            ),
+            ApplicationCommand::BuildCleanupPlan => {
+                serde_json::to_value(self.build_cleanup_plan()?)
+            }
+            ApplicationCommand::ExecuteCleanup { plan_hash } => {
+                serde_json::to_value(self.execute_cleanup(&plan_hash)?)
+            }
             ApplicationCommand::GetSnapshot => serde_json::to_value(self.snapshot()?),
+            ApplicationCommand::SearchItems { query } => {
+                serde_json::to_value(self.search_items(&query)?)
+            }
+            ApplicationCommand::UpdateItem {
+                item_id,
+                title,
+                details,
+            } => serde_json::to_value(self.update_item(&item_id, &title, details)?),
             ApplicationCommand::LinkProject { directory_path } => {
                 serde_json::to_value(self.link_project(directory_path)?)
             }
@@ -510,6 +690,7 @@ impl Service {
     }
 
     pub fn update_settings(&self, settings: AppSettings) -> CoreResult<AppSettings> {
+        let _library_lock = self.library_access(false)?;
         if !matches!(settings.language.as_str(), "ja" | "en" | "ko") {
             return Err(CoreError::Invalid("INVALID_LANGUAGE"));
         }
@@ -543,6 +724,7 @@ impl Service {
         identity_override: Option<&str>,
         source_updated_at: Option<&str>,
     ) -> CoreResult<ImportResult> {
+        let _library_lock = self.library_access(false)?;
         validate_filename(&input.original_filename)?;
         let format = import_format(&input.original_filename)?;
         let metadata = fs::metadata(&input.archive_path)?;
@@ -555,7 +737,7 @@ impl Service {
         let hash = hash_file(&input.archive_path)?;
         let lower = input.original_filename.to_ascii_lowercase();
         let direct_unitypackage = lower.ends_with(".unitypackage");
-        let supported_zip = format == ImportFormat::Zip;
+        let supported_archive = format != ImportFormat::Unitypackage;
         let mut warnings = Vec::new();
         let mut state = "stored".to_string();
         let mut files = Vec::new();
@@ -592,6 +774,9 @@ impl Service {
             })
             .optional()?
             .is_none();
+        if !new_package {
+            self.require_item_visible(&package_id)?;
+        }
         let title = if new_package {
             filename_stem(&input.original_filename)
         } else {
@@ -621,8 +806,14 @@ impl Service {
                 |r| r.get::<_, String>(0),
             )?;
             reconcile_object(&input.archive_path, Path::new(&registered_path), &hash)?;
-            if input.extract_archive && supported_zip && old_state != "extracted" {
-                self.extract_archive(&version_id)?;
+            if input.extract_archive && supported_archive && old_state != "extracted" {
+                match self.extract_archive(&version_id) {
+                    Ok(_) => {}
+                    Err(error) if error.code() == "ARCHIVE_PASSWORD_REQUIRED" => {
+                        warnings.push("ARCHIVE_PASSWORD_REQUIRED_STORED_ONLY".into())
+                    }
+                    Err(error) => return Err(error),
+                }
             }
             let title = conn.query_row(
                 "SELECT title FROM packages WHERE id=?1",
@@ -647,35 +838,6 @@ impl Service {
                 size_bytes: metadata.len(),
                 content_hash: hash.clone(),
             });
-        } else if input.extract_archive && supported_zip {
-            let extracted_root = object_path
-                .parent()
-                .and_then(Path::parent)
-                .ok_or(CoreError::Invalid("INVALID_LIBRARY_PATH"))?
-                .join("extracted");
-            let final_dir = extracted_root.join(&hash);
-            fs::create_dir_all(&extracted_root)?;
-            if !final_dir.exists() {
-                let staging = extracted_root.join(format!(".staging-{}", Uuid::new_v4()));
-                fs::create_dir_all(&staging)?;
-                if let Err(err) = extract_zip_safely(&object_path, &staging) {
-                    let _ = fs::remove_dir_all(&staging);
-                    return Err(err);
-                }
-                if let Err(err) = fs::rename(&staging, &final_dir) {
-                    let _ = fs::remove_dir_all(&staging);
-                    if !final_dir.exists() {
-                        return Err(err.into());
-                    }
-                }
-            }
-            files = collect_unitypackages(&final_dir)?;
-            state = "extracted".into();
-            if files.is_empty() {
-                warnings.push("NO_UNITYPACKAGE_FOUND".into());
-            }
-        } else if input.extract_archive {
-            warnings.push("EXTRACTION_UNSUPPORTED_STORED_ONLY".into());
         }
         let version_id = Uuid::new_v4().to_string();
         let imported_at = now();
@@ -695,7 +857,6 @@ impl Service {
         } else {
             None
         };
-        let item: LibraryItem;
         let tx = conn.unchecked_transaction()?;
         if new_package {
             tx.execute(
@@ -708,7 +869,20 @@ impl Service {
             tx.execute("INSERT INTO package_files(id,version_id,relative_path,kind,size_bytes,content_hash) VALUES (?1,?2,?3,?4,?5,?6)",params![file.id,version_id,file.relative_path,file.kind,file.size_bytes as i64,file.content_hash])?;
         }
         tx.commit()?;
-        item = load_item(&conn, package_id, title)?;
+        if input.extract_archive && supported_archive {
+            match self.extract_archive(&version_id) {
+                Ok(version) => {
+                    if version.files.is_empty() {
+                        warnings.push("NO_UNITYPACKAGE_FOUND".into());
+                    }
+                }
+                Err(error) if error.code() == "ARCHIVE_PASSWORD_REQUIRED" => {
+                    warnings.push("ARCHIVE_PASSWORD_REQUIRED_STORED_ONLY".into())
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        let item = load_item(&conn, package_id, title)?;
         Ok(ImportResult {
             item,
             reused: false,
@@ -722,12 +896,21 @@ impl Service {
 
     /// Explicitly extracts a previously stored ZIP, preserving its content-addressed original.
     pub fn extract_archive(&self, version_id: &str) -> CoreResult<LibraryVersion> {
+        self.extract_archive_with_password(version_id, None)
+    }
+    pub fn extract_archive_with_password(
+        &self,
+        version_id: &str,
+        password: Option<&str>,
+    ) -> CoreResult<LibraryVersion> {
+        let _library_lock = self.library_access(false)?;
+        self.require_version_visible(version_id)?;
         let conn = self.connect()?;
         let (original_filename, hash, current_state, object_path, package_id) = conn.query_row(
             "SELECT original_filename,content_hash,state,object_path,package_id FROM package_versions WHERE id=?1", [version_id],
             |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?)),
         )?;
-        if !original_filename.to_ascii_lowercase().ends_with(".zip") {
+        if import_format(&original_filename)? == ImportFormat::Unitypackage {
             return Err(CoreError::Invalid("EXTRACTION_UNSUPPORTED"));
         }
         let original_path = Path::new(&object_path);
@@ -762,7 +945,12 @@ impl Service {
             fs::create_dir_all(&extracted_root)?;
             let staging = extracted_root.join(format!(".staging-{}", Uuid::new_v4()));
             fs::create_dir_all(&staging)?;
-            if let Err(err) = extract_zip_safely(Path::new(&object_path), &staging) {
+            if let Err(err) = archives::extract(
+                Path::new(&object_path),
+                &original_filename,
+                &staging,
+                password,
+            ) {
                 let _ = fs::remove_dir_all(&staging);
                 return Err(err);
             }
@@ -779,6 +967,7 @@ impl Service {
             "UPDATE package_versions SET state='extracted',extracted_path=?2 WHERE id=?1",
             params![version_id, final_dir.to_string_lossy()],
         )?;
+        maintenance::record_extraction(&tx, version_id, &final_dir)?;
         for file in files {
             // Preserve IDs referenced by confirmed selections and installation journals.
             tx.execute("INSERT INTO package_files(id,version_id,relative_path,kind,size_bytes,content_hash) VALUES (?1,?2,?3,?4,?5,?6) ON CONFLICT(version_id,relative_path) DO UPDATE SET size_bytes=excluded.size_bytes,content_hash=excluded.content_hash", params![file.id,version_id,file.relative_path,file.kind,file.size_bytes as i64,file.content_hash])?;
@@ -902,6 +1091,22 @@ fn migrate(conn: &mut Connection) -> CoreResult<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if version < 5 {
         installation::migrate(conn)?;
+    }
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version < 6 {
+        library::migrate(conn)?;
+    }
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version < 7 {
+        custom::migrate(conn)?;
+    }
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version < 8 {
+        privacy::migrate(conn)?;
+    }
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version < 10 {
+        maintenance::migrate(conn)?;
     }
     Ok(())
 }
@@ -1136,15 +1341,30 @@ fn safe_member_path(name: &str) -> CoreResult<PathBuf> {
     Ok(out)
 }
 
+#[cfg(test)]
 fn extract_zip_safely(path: &Path, destination: &Path) -> CoreResult<()> {
-    extract_zip_safely_with_limits(path, destination, MAX_ARCHIVE_ENTRIES, MAX_EXPANDED_BYTES)
+    extract_zip_safely_with_password(path, destination, None)
 }
 
-fn extract_zip_safely_with_limits(
+fn extract_zip_safely_with_password(
+    path: &Path,
+    destination: &Path,
+    password: Option<&str>,
+) -> CoreResult<()> {
+    extract_zip_safely_with_limits_password(
+        path,
+        destination,
+        MAX_ARCHIVE_ENTRIES,
+        MAX_EXPANDED_BYTES,
+        password,
+    )
+}
+fn extract_zip_safely_with_limits_password(
     path: &Path,
     destination: &Path,
     max_entries: usize,
     max_bytes: u64,
+    password: Option<&str>,
 ) -> CoreResult<()> {
     let file = File::open(path)?;
     let mut archive =
@@ -1152,12 +1372,25 @@ fn extract_zip_safely_with_limits(
     if archive.len() > max_entries {
         return Err(CoreError::Archive("ARCHIVE_TOO_MANY_ENTRIES".into()));
     }
+    archive_contents::zip_entries(&mut archive, "extraction")?;
     let mut total = 0u64;
-    let mut seen: HashMap<PathBuf, bool> = HashMap::new();
     for index in 0..archive.len() {
-        let mut entry = archive
-            .by_index(index)
-            .map_err(|e| CoreError::Archive(e.to_string()))?;
+        let encrypted = archive
+            .by_index_raw(index)
+            .map_err(|_| CoreError::Invalid("ARCHIVE_INVALID"))?
+            .encrypted();
+        if encrypted && password.is_none() {
+            return Err(CoreError::Invalid("ARCHIVE_PASSWORD_REQUIRED"));
+        }
+        let mut entry = if let Some(password) = password {
+            archive
+                .by_index_decrypt(index, password.as_bytes())
+                .map_err(|_| CoreError::Invalid("ARCHIVE_PASSWORD_INVALID"))?
+        } else {
+            archive
+                .by_index(index)
+                .map_err(|_| CoreError::Invalid("ARCHIVE_INVALID"))?
+        };
         let relative = safe_member_path(entry.name())?;
         let is_dir = entry.is_dir();
         if let Some(mode) = entry.unix_mode() {
@@ -1169,20 +1402,6 @@ fn extract_zip_safely_with_limits(
                 _ => return Err(CoreError::Archive("ARCHIVE_SPECIAL_FILE".into())),
             }
         }
-        if seen.contains_key(&relative) {
-            return Err(CoreError::Archive("ARCHIVE_DUPLICATE_PATH".into()));
-        }
-        let mut prefix = PathBuf::new();
-        for component in relative.components() {
-            prefix.push(component.as_os_str());
-            if prefix != relative && seen.get(&prefix) == Some(&false) {
-                return Err(CoreError::Archive("ARCHIVE_PATH_COLLISION".into()));
-            }
-        }
-        if !is_dir && seen.keys().any(|path| path.starts_with(&relative)) {
-            return Err(CoreError::Archive("ARCHIVE_PATH_COLLISION".into()));
-        }
-        seen.insert(relative.clone(), is_dir);
         if total.saturating_add(entry.size()) > max_bytes {
             return Err(CoreError::Archive("ARCHIVE_TOO_LARGE".into()));
         }
@@ -1215,7 +1434,11 @@ fn extract_zip_safely_with_limits(
     Ok(())
 }
 
-fn copy_bounded<R: Read, W: Write>(reader: &mut R, writer: &mut W, budget: u64) -> CoreResult<u64> {
+fn copy_bounded<R: Read + ?Sized, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    budget: u64,
+) -> CoreResult<u64> {
     let mut copied = 0u64;
     let mut buffer = [0u8; 64 * 1024];
     loop {
@@ -1304,7 +1527,26 @@ fn load_item(conn: &Connection, id: String, title: String) -> CoreResult<Library
             state,
         )?);
     }
+    let (booth_item_id, metadata): (Option<String>, String) = conn.query_row(
+        "SELECT booth_item_id,metadata_json FROM packages WHERE id=?1",
+        [&id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let (kind, display_parent_id, description) = conn.query_row(
+        "SELECT kind,display_parent_id,description FROM packages WHERE id=?1",
+        [&id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    let is_hidden = conn.query_row("SELECT is_hidden FROM packages WHERE id=?1", [&id], |r| {
+        r.get(0)
+    })?;
     Ok(LibraryItem {
+        is_hidden,
+        kind,
+        display_parent_id,
+        description,
+        booth_item_id,
+        details: serde_json::from_str(&metadata)?,
         id,
         title,
         versions: output,
@@ -1332,7 +1574,12 @@ fn load_version(
         })?
         .collect::<Result<Vec<_>, _>>()?;
     let label = format!("{}@{}", version_date, &content_hash[..8]);
+    let mut dependencies = conn.prepare("SELECT required_version_id FROM package_dependencies WHERE version_id=?1 ORDER BY required_version_id")?;
+    let required_version_ids = dependencies
+        .query_map([&id], |r| r.get(0))?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(LibraryVersion {
+        required_version_ids,
         id,
         label,
         version_date,
@@ -1346,6 +1593,25 @@ fn load_version(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn locale_resolution_and_first_launch_preserve_saved_language() {
+        assert_eq!(
+            resolve_app_locale(None, &["fr-FR".into(), "ko-KR".into()]),
+            "ko"
+        );
+        assert_eq!(resolve_app_locale(Some("ko"), &["ja-JP".into()]), "ko");
+        assert_eq!(resolve_app_locale(None, &["en_US".into()]), "en");
+        assert_eq!(
+            resolve_app_locale(None, &["en-!".into(), "de-DE".into()]),
+            "ja"
+        );
+        let directory = temp();
+        let service = Service::open_with_locales(&directory, &["ko-KR".into()]).unwrap();
+        assert_eq!(service.snapshot().unwrap().settings.language, "ko");
+        let reopened = Service::open_with_locales(&directory, &["en-US".into()]).unwrap();
+        assert_eq!(reopened.snapshot().unwrap().settings.language, "ko");
+    }
+
     fn temp() -> PathBuf {
         let path = std::env::temp_dir().join(format!("omnooth-core-{}", Uuid::new_v4()));
         fs::create_dir_all(&path).unwrap();
@@ -1465,6 +1731,7 @@ mod tests {
         let metadata = BoothItemMetadata {
             title: Some("Costume Booth Title".into()),
             source_updated_at: Some("2026-08-18T00:30:00+09:00".into()),
+            details: ItemDetails::default(),
         };
         let imported = service
             .import_booth_download_with_metadata(&request, first, Some(&metadata), false, None)

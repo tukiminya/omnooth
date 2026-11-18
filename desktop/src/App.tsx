@@ -7,6 +7,11 @@ import { Icon } from './Icon';
 import { LogDialog } from './LogDialog';
 import { InstallationDialog } from './InstallationDialog';
 import { AppToaster } from './AppToaster';
+import { MaintenanceDialog } from './MaintenanceDialog';
+import { ArchivePasswordDialog } from './ArchivePasswordDialog';
+import { PrivacyNoticeDialog } from './PrivacyNoticeDialog';
+import { CustomDialog } from './CustomDialog';
+import { MetadataDialog } from './MetadataDialog';
 import { ArchiveContentsList } from './ArchiveContentsList';
 import { formatBytes } from './formatBytes';
 import type { AppSettings, AppSnapshot, ArchiveContents, DeepLinkStatus, LibraryItem, LibraryVersion, Project, InstallSelection } from './contracts';
@@ -36,10 +41,18 @@ function App() {
   const [deepLinkStatus, setDeepLinkStatus] = useState<DeepLinkStatus | null>(null);
   const [deepLinkError, setDeepLinkError] = useState('');
   const [query, setQuery] = useState('');
+  const [maintenanceOpen, setMaintenanceOpen] = useState(false);
+  const [passwordVersion, setPasswordVersion] = useState<string | null>(null);
+  const [privacyAction, setPrivacyAction] = useState<'hide' | 'unlock' | null>(null);
+  const [customEditing, setCustomEditing] = useState<{ item: LibraryItem | null } | null>(null);
+  const [metadataEditing, setMetadataEditing] = useState<LibraryItem | null>(null);
+  const [searchResults, setSearchResults] = useState<LibraryItem[] | null>(null);
+  const [searchError, setSearchError] = useState(false);
   const [busy, setBusy] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const lastReceiptKey = useRef<string | null>(null);
   const latestImportStateSignature = useRef(new Map<number, string>());
+  const importToastGenerations = useRef(new Map<number, number>());
   const refreshedImportJobs = useRef(new Set<number>());
   const refreshingImportJobs = useRef(new Set<number>());
   const snapshotGeneration = useRef(0);
@@ -82,7 +95,10 @@ function App() {
     }
     if (!isNewTransition) return;
     const common = { filename: status.filename, count: activeCount ?? 1 };
-    const options = { id: `booth-import-${status.jobId}`, duration: Infinity, action: undefined };
+    const generation = importToastGenerations.current.get(status.jobId) ?? 0;
+    const options = { id: `booth-import-${status.jobId}-${generation}`, duration: Infinity, action: undefined,
+      onDismiss: () => { if ((importToastGenerations.current.get(status.jobId) ?? 0) === generation) importToastGenerations.current.set(status.jobId, generation + 1); },
+    };
     const logAction = { label: t('deepLinkOpenLogs'), onClick: () => setLogsOpen(true) };
     switch (status.state) {
       case 'queued': toast.loading(t('deepLinkQueued', common), options); break;
@@ -176,8 +192,45 @@ function App() {
       return byDate || collator.compare(left.name, right.name);
     });
   }, [filteredProjects, projectSort, snapshot?.settings.language]);
-  const filteredItems = useMemo(() => (snapshot?.items ?? []).filter((item) => `${item.title} ${item.versions.map((v) => v.originalFilename).join(' ')}`.toLowerCase().includes(query.toLowerCase())), [snapshot, query]);
+  useEffect(() => {
+    let disposed = false;
+    setSearchError(false);
+    if (!query.trim()) { setSearchResults(null); return; }
+    const timer = setTimeout(() => {
+      void client.searchItems(query).then(items => { if (!disposed) setSearchResults(items); }).catch(() => { if (!disposed) { setSearchResults([]); setSearchError(true); } });
+    }, 150);
+    return () => { disposed = true; clearTimeout(timer); };
+  }, [query, snapshot]);
+  const filteredItems = searchResults ?? snapshot?.items ?? [];
   const visibleSelection = chosenUnityPackages.filter((id) => selectedVersion?.files.some((file) => file.id === id && file.kind === 'unitypackage' && !file.encrypted));
+
+  function clearPrivateViews() {
+    setMaintenanceOpen(false);
+    snapshotGeneration.current += 1;
+    setSnapshot(current => current ? { ...current, items: [], privacy: current.privacy ? { ...current.privacy, unlocked: false, expiresAt: null } : undefined } : null);
+    setSearchResults(null); setSelectedItemId(null); setSelectedVersionId(null); setChosenUnityPackages([]); setInstallation(null); setCustomEditing(null); setMetadataEditing(null); setPasswordVersion(null);
+  }
+  useEffect(() => {
+    if (!snapshot?.privacy?.available) return;
+    let disposed = false; let stop: (() => void) | undefined;
+    async function refresh() {
+      if (disposed) return;
+      clearPrivateViews(); const generation = snapshotGeneration.current;
+      const next = await client.getSnapshot();
+      if (generation === snapshotGeneration.current) setSnapshot(next);
+    }
+    void client.onVisibilityLocked(() => { void refresh().catch(() => setSnapshot(null)); }).then(unsubscribe => { if (disposed) unsubscribe(); else stop = unsubscribe; });
+    const expiry = snapshot.privacy.expiresAt ? Math.max(0, Date.parse(snapshot.privacy.expiresAt) - Date.now()) : null;
+    const timer = expiry === null ? undefined : setTimeout(() => { void refresh().catch(() => setSnapshot(null)); }, expiry + 100);
+    return () => { disposed = true; stop?.(); if (timer) clearTimeout(timer); };
+  }, [snapshot?.privacy?.available, snapshot?.privacy?.expiresAt]);
+
+  async function changePrivacy(action: 'hide' | 'unlock' | 'lock') {
+    if (action !== 'lock' && !snapshot?.privacy?.noticeAcknowledged) { setPrivacyAction(action); return; }
+    const item = action === 'hide' && selectedItem ? { itemId: selectedItem.id, hidden: !selectedItem.isHidden } : undefined;
+    const next = await perform(() => client.privacyAction(action === 'lock' ? 'lockHiddenItems' : 'unlockHiddenItems', item));
+    if (next) { clearPrivateViews(); setSnapshot(next); }
+  }
 
   function applySnapshot(next: AppSnapshot) {
     snapshotGeneration.current += 1;
@@ -273,7 +326,10 @@ function App() {
 
   async function extractSelected() {
     if (!selectedVersion) return;
-    const next = await perform(() => client.extractArchive(selectedVersion.id));
+    const next = await perform(async () => {
+      try { return await client.extractArchive(selectedVersion.id); }
+      catch (error) { if (String(error).includes('ARCHIVE_PASSWORD_REQUIRED')) { setPasswordVersion(selectedVersion.id); return null; } throw error; }
+    });
     if (next) applySnapshot(next);
   }
 
@@ -320,20 +376,31 @@ function App() {
               <button className="nav-item" onClick={openManual} disabled={busy}><Icon name="info" size={20} /><span>{t('manual')}</span><Icon name="external" size={12} /></button>
               <button className="nav-item" onClick={openSettings}><Icon name="settings" size={20} /><span>{t('settings')}</span></button>
             </div>
+            {snapshot?.privacy?.available && <button className="nav-item" disabled={busy} onClick={() => void changePrivacy(snapshot.privacy?.unlocked ? 'lock' : 'unlock')}>{t(snapshot.privacy.unlocked ? 'lockHidden' : 'unlockHidden')}</button>}
             <div className="app-meta"><span>Ver 0.1.0</span><p>© 2026 omnooth · {t('boothNotice')}</p></div>
           </div>
         </aside>
         <main className="page-main">
           <div className="page-scroll">
+            {activePage === 'library' && searchError && <p role="alert">{t('invalidSearch')}</p>}
             {isLoading ? <LoadingState label={t('loading')} /> : activePage === 'projects' ? <ProjectsPage projects={orderedProjects} allCount={snapshot?.projects.length ?? 0} selectedId={selectedProjectId} selectedProject={selectedProject} sort={projectSort} onSort={setProjectSort} query={query} onQuery={setQuery} onLink={linkProject} onSelect={(project) => { setSelectedProjectId(project.id); toast.info(t('projectSelected', { name: project.name })); }} busy={busy} t={t} /> : <LibraryPage items={filteredItems} selectedItem={selectedItem} selectedVersion={selectedVersion} query={query} onQuery={setQuery} onAdd={addArchives} onSelect={(item) => { setSelectedItemId(item.id); setSelectedVersionId(latestVersion(item.versions)?.id ?? null); setChosenUnityPackages([]); }} onVersion={(id) => { setSelectedVersionId(id); setChosenUnityPackages([]); }} onExtract={extractSelected} archivePreview={currentPreview} onRetryPreview={() => setArchivePreviewAttempt((value) => value + 1)} busy={busy} selectedUnityPackages={visibleSelection} onTogglePackage={togglePackage} onMovePackage={movePackage} project={selectedProject} t={t} />}
           </div>
-          {activePage === 'projects' ? <ProjectGuide t={t} project={selectedProject} onManage={() => { if (selectedProject) setInstallation({ project: selectedProject, selections: [] }); }} /> : <PackageDetails item={selectedItem} version={selectedVersion} selectedCount={visibleSelection.length} project={selectedProject} busy={busy} onAdd={addArchives} onSettings={openSettings} onApply={() => { if (selectedProject && selectedVersion) setInstallation({ project: selectedProject, selections: [{ versionId: selectedVersion.id, fileIds: visibleSelection }] }); }} t={t} />}
+          {activePage === 'projects' ? <ProjectGuide t={t} project={selectedProject} onManage={() => { if (selectedProject) setInstallation({ project: selectedProject, selections: [] }); }} /> : <PackageDetails canHide={snapshot?.privacy?.available ?? false} onHide={() => void changePrivacy('hide')} onCustom={() => setCustomEditing({ item: selectedItem })} onEdit={() => { if (selectedItem) setMetadataEditing(selectedItem); }} item={selectedItem} version={selectedVersion} selectedCount={visibleSelection.length} project={selectedProject} busy={busy} onAdd={addArchives} onSettings={openSettings} onApply={() => { if (selectedProject && selectedVersion) setInstallation({ project: selectedProject, selections: [{ versionId: selectedVersion.id, fileIds: visibleSelection }] }); }} t={t} />}
         </main>
       </div>
-      {installation && <InstallationDialog project={installation.project} initialSelections={installation.selections} onClose={() => setInstallation(null)} t={t} />}
+      {maintenanceOpen && <MaintenanceDialog onClose={() => setMaintenanceOpen(false)} onChanged={async () => { applySnapshot(await client.getSnapshot()); }} t={t} />}
+      {passwordVersion && <ArchivePasswordDialog busy={busy} onClose={() => setPasswordVersion(null)} onExtract={async password => { const next = await perform(() => client.extractArchive(passwordVersion, password)); if (next) { applySnapshot(next); return true; } return false; }} t={t} />}
+      {privacyAction && <PrivacyNoticeDialog busy={busy} onClose={() => setPrivacyAction(null)} onContinue={async () => {
+        const action = privacyAction;
+        const next = await perform(() => client.privacyAction('acknowledgePrivacyNotice'));
+        if (next) { setSnapshot(next); setPrivacyAction(null); const item = action === 'hide' && selectedItem ? { itemId: selectedItem.id, hidden: !selectedItem.isHidden } : undefined; const result = await perform(() => client.privacyAction('unlockHiddenItems', item)); if (result) { clearPrivateViews(); setSnapshot(result); } }
+      }} t={t} />}
+      {customEditing && <CustomDialog items={snapshot?.items ?? []} item={customEditing.item} busy={busy} onClose={() => setCustomEditing(null)} onSave={async input => { const next = await perform(() => client.saveCustomPackage(input)); if (next) { applySnapshot(next); setCustomEditing(null); } }} t={t} />}
+      {metadataEditing && <MetadataDialog item={metadataEditing} busy={busy} onClose={() => setMetadataEditing(null)} onSave={async (title, details) => { const next = await perform(() => client.updateItem(metadataEditing.id, title, details)); if (next) { applySnapshot(next); setMetadataEditing(null); } }} t={t} />}
+      {installation && <InstallationDialog items={snapshot?.items ?? []} project={installation.project} initialSelections={installation.selections} onClose={() => setInstallation(null)} t={t} />}
       {logsOpen && <LogDialog getLogs={client.getLogs} onClose={() => setLogsOpen(false)} t={t} />}
-      {settingsOpen && settingsDraft && <SettingsDialog draft={settingsDraft} setDraft={setSettingsDraft} versions={snapshot?.items.flatMap((item) => item.versions.map((version) => ({ itemTitle: item.title, version })) ) ?? []} tab={settingsTab} setTab={setSettingsTab} busy={busy} deepLinkStatus={deepLinkStatus} deepLinkError={deepLinkError} onRegisterDeepLink={registerDeepLink} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onChoosePath={chooseLibraryPath} t={t} />}
-      <AppToaster container={installation ? '.installation-dialog' : logsOpen ? '.log-dialog' : settingsOpen ? '.settings-dialog' : null} />
+      {settingsOpen && settingsDraft && <SettingsDialog onMaintenance={async () => { const next = await perform(() => client.updateSettings(settingsDraft)); if (next) { applySnapshot(next); if (i18n.language !== next.settings.language) await i18n.changeLanguage(next.settings.language); setSettingsOpen(false); setMaintenanceOpen(true); } }} draft={settingsDraft} setDraft={setSettingsDraft} versions={snapshot?.items.flatMap((item) => item.versions.map((version) => ({ itemTitle: item.title, version })) ) ?? []} tab={settingsTab} setTab={setSettingsTab} busy={busy} deepLinkStatus={deepLinkStatus} deepLinkError={deepLinkError} onRegisterDeepLink={registerDeepLink} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onChoosePath={chooseLibraryPath} t={t} />}
+      <AppToaster container={maintenanceOpen ? '.metadata-dialog' : passwordVersion ? '.metadata-dialog' : privacyAction ? '.metadata-dialog' : customEditing ? '.metadata-dialog' : metadataEditing ? '.metadata-dialog' : installation ? '.installation-dialog' : logsOpen ? '.log-dialog' : settingsOpen ? '.settings-dialog' : null} />
     </div>
   );
 
@@ -381,7 +448,7 @@ function LibraryPage({ items, selectedItem, selectedVersion, query, onQuery, onA
     <div className="notice-card compact"><Icon name="warning" size={18} /><div><strong>{t('libraryBehaviorTitle')}</strong><p>{t('libraryBehavior')}</p></div></div>
     <div className="toolbar"><SearchField value={query} onChange={onQuery} placeholder={t('searchLibrary')} ariaLabel={t('searchLibrary')} /><span className="subtle">{t('itemsCount', { count: items.length })}</span></div>
     {!items.length ? <EmptyState title={t('emptyLibraryTitle')} body={t('emptyLibraryHint')} action={t('addFiles')} onAction={onAdd} disabled={busy} /> : <div className="library-layout">
-      <div className="item-list">{items.map((item) => <button key={item.id} className={`item-row ${selectedItem?.id === item.id ? 'selected' : ''}`} onClick={() => onSelect(item)} disabled={busy}><span className="file-badge">ZIP</span><span className="item-row-copy"><strong>{item.title}</strong><small>{item.versions.length} {t('versions')}</small></span><Icon name="chevron" size={12} /></button>)}</div>
+      <div className="item-list">{items.map((item) => <button key={item.id} className={`item-row ${selectedItem?.id === item.id ? 'selected' : ''}`} onClick={() => onSelect(item)} disabled={busy}><span className="file-badge">ZIP</span><span className="item-row-copy"><strong>{item.title}</strong>{item.displayParentId && <small>{items.find(parent => parent.id === item.displayParentId)?.title}</small>}<small>{item.versions.length} {t('versions')}</small></span><Icon name="chevron" size={12} /></button>)}</div>
       <div className="item-content">{selectedItem && selectedVersion ? <>
         <div className="item-titlebar"><div><h2>{selectedItem.title}</h2><p className="subtle mono">{selectedVersion.originalFilename}</p></div><label className="version-select-label"><span>{t('version')}</span><select value={selectedVersion.id} onChange={(event) => onVersion(event.target.value)} disabled={busy}>{selectedItem.versions.map((version) => <option key={version.id} value={version.id}>{version.label}</option>)}</select></label></div>
         <div className="version-summary"><span className={`status-dot ${selectedVersion.state}`} />{selectedVersion.state === 'extracted' ? t('extracted') : selectedVersion.state === 'ready' ? t('ready') : t('storedOnly')}<span className="mono">{selectedVersion.versionDate}</span><span className="mono">SHA-256 {selectedVersion.contentHash.slice(0, 8)}</span></div>
@@ -396,11 +463,16 @@ function LibraryPage({ items, selectedItem, selectedVersion, query, onQuery, onA
   </section>;
 }
 
-function PackageDetails({ item, version, selectedCount, project, busy, onAdd, onSettings, onApply, t }: { item: LibraryItem | null; version: LibraryVersion | null; selectedCount: number; project: Project | null; busy: boolean; onAdd: () => void; onSettings: () => void; onApply: () => void; t: (key: string, options?: Record<string, unknown>) => string }) {
+function PackageDetails({ canHide, onHide, onCustom, onEdit, item, version, selectedCount, project, busy, onAdd, onSettings, onApply, t }: { canHide: boolean; onHide: () => void; onCustom: () => void; onEdit: () => void; item: LibraryItem | null; version: LibraryVersion | null; selectedCount: number; project: Project | null; busy: boolean; onAdd: () => void; onSettings: () => void; onApply: () => void; t: (key: string, options?: Record<string, unknown>) => string }) {
   return <aside className="right-rail">
     <h2>{t('packageDetails')}</h2>
     {item && version ? <>
       <div className="rail-identity"><Icon name="disk" size={18} /><strong>{item.title}</strong></div><p className="rail-description">{t('originalFilename')}: <span className="mono">{version.originalFilename}</span></p>
+      {canHide && <button className="button secondary full" disabled={busy} onClick={onHide}>{t(item.isHidden ? 'unhideItem' : 'hideItem')}</button>}
+      <button className="button secondary full" onClick={onCustom} disabled={busy}>{t(item.kind === 'custom' ? 'editCustom' : 'createCustom')}</button>
+      {item.description && <p className="plain-text">{item.description}</p>}
+      <button className="button secondary full" onClick={onEdit} disabled={busy}>{t('editMetadata')}</button>
+      {item.details && <div className="rail-description"><p>{item.details.shop} {item.details.category} {item.details.isStarred ? '★' : ''}</p><p>{item.details.tags.join(' · ')}</p>{item.details.description && <details><summary>{t('description')}</summary><p className="plain-text">{item.details.description}</p></details>}{item.details.releaseNotes && <details><summary>{t('releaseNotes')}</summary><p>{t('extractedReleaseNotes')}</p><p className="plain-text">{item.details.releaseNotes}</p>{item.boothItemId && /^\d+$/.test(item.boothItemId) && <a href={`https://booth.pm/ja/items/${item.boothItemId}`} target="_blank" rel="noreferrer">{t('sourceProduct')}</a>}</details>}</div>}
       <hr /><div className="rail-label-row"><strong>{t('includedFiles')}</strong><span>{version.files.length}</span></div>
       {version.files.slice(0, 6).map((file) => <div className="rail-file" key={file.id}><span className="file-type">{file.relativePath.split('.').at(-1)?.toUpperCase() || 'FILE'}</span><div><span className="file-name mono">{file.relativePath}</span><small>{formatBytes(file.sizeBytes)} · {file.contentHash ? `SHA-256 ${file.contentHash.slice(0, 8)}` : t('hashOnImport')}</small></div></div>)}
       {version.files.length > 6 && <p className="subtle">{t('moreFiles', { count: version.files.length - 6 })}</p>}
@@ -416,7 +488,7 @@ function ProjectGuide({ t, project, onManage }: { project: Project | null; onMan
   return <aside className="right-rail guide-rail"><h2><Icon name="link" size={20} />{t('projectGuide')}</h2>{project && <button className="button secondary full" onClick={onManage}>{t('manageInstallations')}</button>}<p>{t('projectGuideIntro')}</p><hr /><div className="guide-step"><strong>{t('guideStepOne')}</strong><p>{t('guideStepOneHint')}</p></div><div className="guide-step"><strong>{t('guideStepTwo')}</strong><p>{t('guideStepTwoHint')}</p></div><div className="guide-step"><strong>{t('guideStepThree')}</strong><p>{t('guideStepThreeHint')}</p></div><div className="guide-callout"><strong>{t('projectSafetyTitle')}</strong><p>{t('projectSafety')}</p></div></aside>;
 }
 
-function SettingsDialog({ draft, setDraft, versions, tab, setTab, busy, deepLinkStatus, deepLinkError, onRegisterDeepLink, onClose, onSave, onChoosePath, t }: { draft: AppSettings; setDraft: (value: AppSettings) => void; versions: Array<{ itemTitle: string; version: LibraryVersion }>; tab: SettingsTab; setTab: (value: SettingsTab) => void; busy: boolean; deepLinkStatus: DeepLinkStatus | null; deepLinkError: string; onRegisterDeepLink: () => void; onClose: () => void; onSave: () => void; onChoosePath: () => void; t: (key: string, options?: Record<string, unknown>) => string }) {
+function SettingsDialog({ onMaintenance, draft, setDraft, versions, tab, setTab, busy, deepLinkStatus, deepLinkError, onRegisterDeepLink, onClose, onSave, onChoosePath, t }: { onMaintenance: () => void; draft: AppSettings; setDraft: (value: AppSettings) => void; versions: Array<{ itemTitle: string; version: LibraryVersion }>; tab: SettingsTab; setTab: (value: SettingsTab) => void; busy: boolean; deepLinkStatus: DeepLinkStatus | null; deepLinkError: string; onRegisterDeepLink: () => void; onClose: () => void; onSave: () => void; onChoosePath: () => void; t: (key: string, options?: Record<string, unknown>) => string }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const patch = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => setDraft({ ...draft, [key]: value });
   useEffect(() => {
@@ -437,7 +509,7 @@ function SettingsDialog({ draft, setDraft, versions, tab, setTab, busy, deepLink
         <div className="settings-divider" />
         <div className="settings-section"><h3>{t('storage')}</h3><p>{t('storageHint')}</p><label className="field-label" htmlFor="library-path">{t('libraryPath')}</label><div className="path-input-row"><input id="library-path" className="mono" value={draft.libraryPath} readOnly /><button className="button secondary" onClick={onChoosePath} disabled={busy}>{t('chooseFolder')}</button></div></div>
         <div className="settings-divider" />
-        <div className="settings-section"><h3>{t('import')}</h3><p>{t('importHint')}</p><label className="check-setting"><input type="checkbox" checked={draft.extractArchives} disabled={busy} onChange={(event) => patch('extractArchives', event.target.checked)} /><span><strong>{t('extractIncoming')}</strong><small>{t('extractIncomingHint')}</small></span></label><label className="check-setting"><input type="checkbox" checked={draft.keepOldVersions} disabled onChange={(event) => patch('keepOldVersions', event.target.checked)} /><span><strong>{t('keepVersions')}</strong><small>{t('keepVersionsHint')}</small></span></label></div>
+        <div className="settings-section"><h3>{t('import')}</h3><p>{t('importHint')}</p><label className="check-setting"><input type="checkbox" checked={draft.extractArchives} disabled={busy} onChange={(event) => patch('extractArchives', event.target.checked)} /><span><strong>{t('extractIncoming')}</strong><small>{t('extractIncomingHint')}</small></span></label><label className="check-setting"><input type="checkbox" checked={draft.keepOldVersions} disabled={busy} onChange={(event) => patch('keepOldVersions', event.target.checked)} /><span><strong>{t('keepVersions')}</strong><small>{t('keepVersionsHint')}</small></span></label><button className="button secondary" disabled={busy} onClick={onMaintenance}>{t('saveAndReviewCleanup')}</button></div>
       </>}</div>
     </div>
     <footer className="dialog-footer"><p>{t('settingsFooter')}</p><div><button className="button secondary" onClick={onClose}>{t('cancel')}</button><button className="button primary" onClick={onSave} disabled={busy}>{busy ? t('working') : t('save')}</button></div></footer>
@@ -454,6 +526,9 @@ function EmptyState({ title, body, action, onAction, disabled = false }: { title
 
 function LoadingState({ label }: { label: string }) { return <div className="loading-state" role="status"><span className="spinner" />{label}</div>; }
 function errorMessage(error: unknown, fallback: string) {
+  if (String(error).includes('ARCHIVE_PASSWORD_INVALID')) return i18n.t('archivePasswordInvalid');
+  const code = String(error).match(/AUTH_CANCELLED|AUTH_UNAVAILABLE|AUTH_REQUIRED|NOTICE_REQUIRED/)?.[0];
+  if (code) return i18n.t(code === 'AUTH_CANCELLED' ? 'authCancelled' : code === 'AUTH_UNAVAILABLE' ? 'authUnavailable' : 'authRequired');
   const value = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
   if (value === 'DESKTOP_REQUIRED') return i18n.t('desktopOnly');
   if (value === 'BUNDLE_REQUIRED') return i18n.t('bundleRequired');
@@ -466,7 +541,7 @@ function deepLinkErrorMessage(error: unknown) {
   return i18n.t('deepLinkError');
 }
 function localizedImportWarning(warning: string, t: (key: string) => string) {
-  const key = warning === 'NO_UNITYPACKAGE_FOUND' ? 'warningNoUnitypackage' : warning === 'EXTRACTION_UNSUPPORTED_STORED_ONLY' ? 'warningExtractionUnsupported' : '';
+  const key = warning === 'ARCHIVE_PASSWORD_REQUIRED_STORED_ONLY' ? 'archivePasswordStored' : warning === 'NO_UNITYPACKAGE_FOUND' ? 'warningNoUnitypackage' : warning === 'EXTRACTION_UNSUPPORTED_STORED_ONLY' ? 'warningExtractionUnsupported' : '';
   return key ? t(key) : warning;
 }
 function latestVersion(versions: LibraryVersion[]) {

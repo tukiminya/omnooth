@@ -1056,3 +1056,127 @@ fn updates_cannot_rewrite_existing_shared_folder_metadata() {
         "ASSET_PATH_CONFLICT"
     );
 }
+
+#[test]
+fn custom_versions_are_immutable_and_require_explicit_dependency_files() {
+    let w = Workspace::new();
+    let base = w.import(
+        "Base.unitypackage",
+        &[("Assets/Base.txt", A, Some(b"base"))],
+    );
+    let source = w.root.join("Custom.unitypackage");
+    fs::write(
+        &source,
+        package(&[("Assets/Custom.txt", B, Some(b"custom"))]),
+    )
+    .unwrap();
+    let mut input = SaveCustomInput {
+        package_id: None,
+        name: "My custom".into(),
+        description: "Modified".into(),
+        display_parent_id: base.id.clone(),
+        unitypackage_paths: vec![source],
+        required_version_ids: vec![base.versions[0].id.clone()],
+    };
+    let custom = w.service.save_custom_package(input.clone()).unwrap();
+    assert_eq!(custom.kind, "custom");
+    assert!(w
+        .service
+        .get_installations(&w.project.id)
+        .unwrap()
+        .packages
+        .is_empty());
+    let version = &custom.versions[0];
+    assert_eq!(
+        w.service
+            .build_install_plan(BuildInstallPlanInput {
+                project_id: w.project.id.clone(),
+                selections: vec![InstallSelection {
+                    version_id: version.id.clone(),
+                    file_ids: vec![version.files[0].id.clone()]
+                }],
+                remove_package_ids: vec![]
+            })
+            .unwrap_err()
+            .code(),
+        "DEPENDENCY_SELECTION_REQUIRED"
+    );
+    let plan = w
+        .service
+        .build_install_plan(BuildInstallPlanInput {
+            project_id: w.project.id.clone(),
+            selections: vec![
+                InstallSelection {
+                    version_id: version.id.clone(),
+                    file_ids: vec![version.files[0].id.clone()],
+                },
+                InstallSelection {
+                    version_id: base.versions[0].id.clone(),
+                    file_ids: vec![base.versions[0].files[0].id.clone()],
+                },
+            ],
+            remove_package_ids: vec![],
+        })
+        .unwrap();
+    let gateway = FakeUnity::success();
+    let job = w.service.install_item(w.input(&plan), &gateway).unwrap();
+    assert_eq!(
+        w.service
+            .poll_installation(&job.id, &gateway)
+            .unwrap()
+            .status,
+        "succeeded"
+    );
+    input.package_id = Some(custom.id.clone());
+    input.unitypackage_paths.clear();
+    input.name = "Renamed".into();
+    let edited = w.service.save_custom_package(input.clone()).unwrap();
+    assert_eq!(edited.versions[0].id, version.id);
+    input.required_version_ids = vec![version.id.clone()];
+    assert_eq!(
+        w.service.save_custom_package(input).unwrap_err().code(),
+        "DEPENDENCY_VERSION_CONFLICT"
+    );
+}
+
+#[test]
+fn cleanup_removes_only_expired_unexecuted_plans_and_closed_backups() {
+    let w = Workspace::new();
+    let item = w.import(
+        "Cleanup.unitypackage",
+        &[("Assets/Cleanup.txt", A, Some(b"fixture"))],
+    );
+    let plan = w.plan(
+        &item.versions[0],
+        vec![item.versions[0].files[0].id.clone()],
+    );
+    let conn = rusqlite::Connection::open(w.root.join("app/omnooth.sqlite")).unwrap();
+    assert_eq!(w.service.build_cleanup_plan().unwrap().staging_count, 0);
+    conn.execute(
+        "UPDATE install_plans SET created_at='2000-01-01T00:00:00Z' WHERE id=?1",
+        [&plan.id],
+    )
+    .unwrap();
+    let cleanup = w.service.build_cleanup_plan().unwrap();
+    assert_eq!(cleanup.staging_count, 1);
+    w.service.execute_cleanup(&cleanup.plan_hash).unwrap();
+    assert!(!w.root.join("app/install-staging").join(plan.id).exists());
+    let job = w.install(&item.versions[0], &FakeUnity::success());
+    conn.execute(
+        "UPDATE install_jobs SET created_at='2000-01-01T00:00:00Z' WHERE id=?1",
+        [&job.id],
+    )
+    .unwrap();
+    let cleanup = w.service.build_cleanup_plan().unwrap();
+    assert_eq!(cleanup.backup_count, 1);
+    w.service.execute_cleanup(&cleanup.plan_hash).unwrap();
+    assert_eq!(
+        w.service
+            .get_installations(&w.project.id)
+            .unwrap()
+            .packages
+            .len(),
+        1
+    );
+    assert!(fs::read(w.project.path.clone() + "/Assets/Cleanup.txt").is_ok());
+}

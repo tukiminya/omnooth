@@ -35,11 +35,18 @@ export interface LibraryVersion {
   originalFilename: string;
   state: 'stored' | 'extracted' | 'ready';
   files: ContentFile[];
+  requiredVersionIds?: string[];
 }
 
 export interface LibraryItem {
   id: string;
   title: string;
+  boothItemId?: string | null;
+  kind?: string;
+  isHidden?: boolean;
+  displayParentId?: string | null;
+  description?: string;
+  details?: { description: string; shop: string; category: string; tags: string[]; ageRating: string; isStarred: boolean; releaseNotes: string | null };
   versions: LibraryVersion[];
 }
 
@@ -47,6 +54,7 @@ export interface AppSnapshot {
   projects: Project[];
   items: LibraryItem[];
   settings: AppSettings;
+  privacy?: { available: boolean; noticeAcknowledged: boolean; unlocked: boolean; expiresAt: string | null };
 }
 
 export interface ImportResult {
@@ -130,3 +138,15 @@ export interface RecoveryReport {
   conflicts: string[];
   requiresManualAction: boolean;
 }
+
+export interface SaveCustomInput {
+  packageId: string | null;
+  name: string;
+  description: string;
+  displayParentId: string;
+  unitypackagePaths: string[];
+  requiredVersionIds: string[];
+}
+
+export interface CleanupPlan { planHash: string; versions: Array<[string, string]>; stagingCount: number; backupCount: number; bytes: number }
+export interface CleanupReport { removedVersions: number; removedDirectories: number; retainedPaths: string[] }

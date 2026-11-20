@@ -1,0 +1,8 @@
+[package]
+name = "omnooth"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+gpui.workspace = true
